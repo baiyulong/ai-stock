@@ -1,0 +1,128 @@
+﻿/* 鍏ㄥ眬鏍峰紡閲嶇疆 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: #131722;
+  color: #d1d4dc;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 婊氬姩鏉℃牱寮?*/
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #1e222d;
+}
+::-webkit-scrollbar-thumb {
+  background: #363a45;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4a4e59;
+}
+
+/* 娴呰壊涓婚瑕嗙洊 */
+.light {
+  background: #fff;
+  color: #131722;
+}
+.light .watchlist-view {
+  background: #fff;
+}
+.light .wl-header,
+.light .add-bar {
+  border-bottom-color: #e0e0e0;
+}
+.light .wl-title {
+  color: #131722;
+}
+.light .wl-table th {
+  background: #f5f5f5;
+  color: #666;
+  border-bottom-color: #e0e0e0;
+}
+.light .wl-table td {
+  color: #131722;
+  border-bottom-color: #f0f0f0;
+}
+.light .wl-row:hover {
+  background: #f5f5f5;
+}
+.light .cell-name {
+  color: #131722;
+}
+.light .cell-code {
+  color: #999;
+}
+.light .btn-theme,
+.light .btn-cancel,
+.light .btn-back {
+  border-color: #ddd;
+  color: #131722;
+}
+.light .btn-theme:hover,
+.light .btn-cancel:hover,
+.light .btn-back:hover {
+  background: #f0f0f0;
+}
+.light .btn-remove {
+  color: #999;
+}
+.light .btn-remove:hover {
+  background: #f0f0f0;
+  color: #ef5350;
+}
+.light .chart-view {
+  background: #fff;
+}
+.light .chart-header {
+  border-bottom-color: #e0e0e0;
+  background: #fff;
+}
+.light .quote-bar {
+  background: #fff;
+  border-bottom-color: #e0e0e0;
+}
+.light .q-name {
+  color: #131722;
+}
+.light .q-code,
+.light .q-meta {
+  color: #999;
+}
+.light .tf-group {
+  background: #f0f0f0;
+}
+.light .tf-group button {
+  color: #666;
+}
+.light .search-input {
+  background: #f5f5f5;
+  border-color: #ddd;
+  color: #131722;
+}
+.light .search-dropdown {
+  background: #fff;
+  border-color: #e0e0e0;
+}
+.light .search-item:hover {
+  background: #f5f5f5;
+}
+.light .si-name {
+  color: #131722;
+}
+.light .si-code {
+  color: #999;
+}
