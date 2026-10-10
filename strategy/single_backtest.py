@@ -97,6 +97,10 @@ def run_single_backtest(
     if df.empty:
         return {"error": f"股票 {code} 无数据"}
 
+    # 统一日期格式：去掉时区，避免 datetime64[UTC] 与 Timestamp 比较错误
+    if pd.api.types.is_datetime64_any_dtype(df["date"]):
+        df["date"] = df["date"].dt.tz_localize(None) if df["date"].dt.tz is not None else df["date"]
+
     df = df.sort_values("date").reset_index(drop=True)
     df = _calc_indicators(df)
 
