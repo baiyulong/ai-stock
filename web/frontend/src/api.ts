@@ -751,6 +751,7 @@ export interface BacktestResult {
   structure_count: number;
   trades: BacktestTrade[];
   klines: any[];
+  error?: string;
 }
 
 export async function runSingleBacktest(

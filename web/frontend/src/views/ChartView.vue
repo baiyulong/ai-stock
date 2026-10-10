@@ -124,16 +124,28 @@ async function startBacktest() {
   backtestLoading.value = true;
   showBacktestModal.value = false;
   try {
+    // 去掉 sh/sz 前缀，DuckDB 中存储纯数字代码
+    const pureCode = props.code.replace(/^(sh|sz|bj)/i, '');
     const result = await runSingleBacktest(
-      props.code,
+      pureCode,
       btStartDate.value || undefined,
       btEndDate.value || undefined,
       btCapital.value,
     );
     if (result) {
+      if (result.error) {
+        alert('回测失败：' + result.error);
+        return;
+      }
+      if (result.klines.length === 0) {
+        alert('回测无数据：该股票在指定区间内没有足够的历史数据');
+        return;
+      }
       backtestResult.value = result;
       showBacktestPanel.value = true;
       playIndex.value = 0;
+    } else {
+      alert('回测请求失败，请检查服务是否正常');
     }
   } finally {
     backtestLoading.value = false;
