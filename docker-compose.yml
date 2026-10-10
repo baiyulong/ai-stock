@@ -1,27 +1,62 @@
+version: '3.8'
+
 services:
-  stock-web:
+  # Go 后端服务：TDX 行情 + DuckDB 存储 + 前端托管 + 反向代理
+  tdx-server:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: tdx-stock-web
+      dockerfile: web/Dockerfile
+    container_name: tdx-server
     ports:
-      - "8080:8080"
+      - "18080:18080"
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+    volumes:
+      - duckdb-data:/app/data/duckdb
+      - codes-data:/app/data/database
     networks:
-      - stock-network
+      - tdx-network
+    depends_on:
+      - strategy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/"]
+      test: ["CMD", "bash", "-c", "apt-get update && apt-get install -y wget && wget --no-verbose --tries=1 --spider http://localhost:18080/api/health || exit 1"]
       interval: 30s
-      timeout: 3s
+      timeout: 10s
       retries: 3
-      start_period: 5s
-    labels:
-      - "com.stock.description=TDX Stock Data Query System"
-      - "com.stock.version=1.0.0"
+      start_period: 15s
+
+  # Python 策略服务：选股 + 监控 + 待买持仓 + Webhook
+  strategy:
+    build:
+      context: .
+      dockerfile: strategy/Dockerfile
+    container_name: tdx-strategy
+    ports:
+      - "18081:18081"
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
+      - STRATEGY_SERVICE_URL=http://tdx-server:18080
+    volumes:
+      - strategy-data:/app/data
+    networks:
+      - tdx-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:18081/api/screener/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 networks:
-  stock-network:
+  tdx-network:
     driver: bridge
 
+volumes:
+  duckdb-data:
+    driver: local
+  codes-data:
+    driver: local
+  strategy-data:
+    driver: local
