@@ -177,10 +177,9 @@ function enterBacktestMode() {
   if (!backtestResult.value || !chartRef.value) return;
   isBacktestMode.value = true;
   const allBars = backtestKlinesToOHLCV(backtestResult.value.klines);
-  // 初始只显示第一根
-  staticProvider.value = new StaticProvider(allBars.slice(0, 1));
+  // 显示全部K线
+  staticProvider.value = new StaticProvider(allBars);
   chartRef.value.data.registerProvider('static', staticProvider.value);
-  // 切换 symbol 到 static 数据源
   chartRef.value.setMarket({ symbol: `static:${props.code}`, timeframe: 'D' });
   currentTF.value = 'D';
 }
@@ -194,14 +193,10 @@ function exitBacktestMode() {
   }
 }
 
-// 更新播放位置的K线显示
+// 更新播放位置（K线显示全部，只更新面板信息）
 function updatePlaybackChart() {
-  if (!staticProvider.value || !backtestResult.value || !chartRef.value) return;
-  const allBars = backtestKlinesToOHLCV(backtestResult.value.klines);
-  const visibleBars = allBars.slice(0, playIndex.value + 1);
-  staticProvider.value.setBars(visibleBars);
-  // 触发重新加载
-  chartRef.value.setMarket({ symbol: `static:${props.code}`, timeframe: 'D' });
+  // K线图显示全部回测数据，不需要更新
+  // 面板信息通过 computed 属性自动更新
 }
 
 function closeBacktestPanel() {
@@ -274,6 +269,12 @@ const currentTrades = computed(() => {
 const playProgress = computed(() => {
   if (!backtestResult.value) return 0;
   return Math.round((playIndex.value / (backtestResult.value.klines.length - 1)) * 100);
+});
+
+// 当前播放位置可见的交易记录
+const visibleTrades = computed(() => {
+  if (!backtestResult.value || !currentKline.value) return [];
+  return backtestResult.value.trades.filter(t => t.date <= currentKline.value!.date);
 });
 
 function onProgressChange(e: Event) {
@@ -418,7 +419,7 @@ onUnmounted(() => {
               <span>原因</span>
             </div>
             <div
-              v-for="(t, i) in backtestResult.trades"
+              v-for="(t, i) in visibleTrades"
               :key="i"
               class="trades-row"
               :class="{ active: currentKline && t.date === currentKline.date }"
