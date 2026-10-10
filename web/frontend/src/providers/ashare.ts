@@ -93,3 +93,47 @@ export class AShareProvider implements DataProvider {
     };
   }
 }
+
+/**
+ * StaticProvider - 静态K线数据 provider，用于回测播放
+ * 接受预设的K线数据，支持更新数据范围实现播放效果
+ */
+export class StaticProvider implements DataProvider {
+  private bars: OHLCV[] = [];
+
+  constructor(bars?: OHLCV[]) {
+    if (bars) this.bars = bars;
+  }
+
+  setBars(bars: OHLCV[]) {
+    this.bars = bars;
+  }
+
+  async getBars(ticker: string, timeframe: string, range: BarRange): Promise<OHLCV[]> {
+    // 返回全部数据，Vela 会自动处理可见范围
+    return this.bars;
+  }
+
+  async getSymbolInfo?(ticker: string): Promise<SymbolInfo | undefined> {
+    return {
+      ticker,
+      description: ticker,
+      type: 'stock',
+      exchange: 'BACKTEST',
+    };
+  }
+
+  info() {
+    return {
+      name: 'static',
+      displayName: '回测数据',
+      requiresApiKey: false,
+      supportedTimeframes: ['D'],
+      capabilities: {
+        enumerate: false,
+        stream: false,
+        symbolInfo: true,
+      },
+    };
+  }
+}

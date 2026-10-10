@@ -121,8 +121,10 @@ def run_single_backtest(
     position_price = 0  # 持仓成本
     trades = []  # 交易记录
     structure_found = False  # 是否已发现底部结构
+    structure_start_idx = -1  # 结构形成时的索引
     trade_params = None  # 当前交易参数
     half_sold = False  # 是否已减半
+    buy_mode = None  # 买入方式：pullback / breakout
 
     # 用于K线标注
     buy_signals = []  # [(date, price)]
@@ -141,36 +143,57 @@ def run_single_backtest(
             if _check_structure_formed(row):
                 if not structure_found:
                     structure_found = True
+                    structure_start_idx = i
                     structure_dates.append(date)
-                    trade_params = _calc_trade_params(row)
+                # 每天更新交易参数（MA20等指标在变化）
+                trade_params = _calc_trade_params(row)
 
-                # 检查是否进入买入区：现价 <= B 且 RR >= 2
+                buy_price = None
+                buy_mode = None
+
+                # 买入条件1：回踩买入 - 现价 <= B 且 RR >= 2
                 if trade_params and close <= trade_params["B"] and trade_params["RR"] >= 2.0:
+                    buy_price = trade_params["B"]
+                    buy_mode = "pullback"
+
+                # 买入条件2：突破买入 - 最高价 >= H*1.0094（T*0.98）且 RR >= 2
+                elif trade_params and high >= trade_params["H"] * 1.0094 and trade_params["RR"] >= 2.0:
+                    buy_price = trade_params["H"] * 1.0094
+                    buy_mode = "breakout"
+
+                if buy_price and trade_params:
                     # 计算仓位：资金1%风险 / (B-L1)/B，上限15%
                     risk_per_share = trade_params["B"] - trade_params["L1"]
                     if risk_per_share > 0:
                         risk_amount = cash * 0.01
                         shares_by_risk = int(risk_amount / risk_per_share)
-                        max_shares = int(cash * 0.15 / trade_params["B"])
+                        max_shares = int(cash * 0.15 / buy_price)
                         shares = min(shares_by_risk, max_shares)
                         shares = max(shares, 100)  # 至少1手
                         shares = (shares // 100) * 100  # 整手
 
-                        cost = shares * trade_params["B"]
+                        cost = shares * buy_price
                         if cost <= cash and shares > 0:
                             cash -= cost
                             position = shares
-                            position_price = trade_params["B"]
+                            position_price = buy_price
                             half_sold = False
-                            buy_signals.append((date, trade_params["B"]))
+                            buy_signals.append((date, round(buy_price, 2)))
                             trades.append({
                                 "type": "buy",
                                 "date": date,
-                                "price": trade_params["B"],
+                                "price": round(buy_price, 2),
                                 "shares": shares,
                                 "amount": round(cost, 2),
+                                "mode": buy_mode,
                                 "params": trade_params,
                             })
+
+            else:
+                # 结构消失（不再满足条件），重置
+                if structure_found:
+                    structure_found = False
+                    trade_params = None
 
         # 持仓状态：监控止损止盈
         elif position > 0 and trade_params:

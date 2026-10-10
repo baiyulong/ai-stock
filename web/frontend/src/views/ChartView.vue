@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
 import { Vela } from '@luxalgo/vela';
-import { AShareProvider } from '@/providers/ashare';
+import { AShareProvider, StaticProvider } from '@/providers/ashare';
 import { theme, toggleTheme } from '@/stores/theme';
 import { isInWatchlist, addToWatchlist, removeFromWatchlist } from '@/stores/watchlist';
 import { fetchStockQuote, fetchIndexQuote, type QuoteData, runSingleBacktest, type BacktestResult } from '@/api';
@@ -22,6 +22,8 @@ const chartContainer = ref<HTMLDivElement | null>(null);
 const currentTF = ref('D');
 const quote = ref<QuoteData | null>(null);
 const chartRef = ref<InstanceType<typeof Vela> | null>(null);
+const staticProvider = ref<StaticProvider | null>(null);
+const isBacktestMode = ref(false);
 let quoteTimer: ReturnType<typeof setInterval> | null = null;
 
 const TIMEFRAMES = [
@@ -144,6 +146,8 @@ async function startBacktest() {
       backtestResult.value = result;
       showBacktestPanel.value = true;
       playIndex.value = 0;
+      // 切换到回测模式
+      enterBacktestMode();
     } else {
       alert('回测请求失败，请检查服务是否正常');
     }
@@ -152,9 +156,58 @@ async function startBacktest() {
   }
 }
 
+// 回测K线转 OHLCV 格式
+function backtestKlinesToOHLCV(klines: any[]): any[] {
+  const tzOffset = new Date().getTimezoneOffset() * 60 * 1000;
+  return klines.map((k) => {
+    const time = new Date(k.date + 'T15:00:00+08:00').getTime();
+    return {
+      time: isNaN(time) ? Date.now() : time - tzOffset,
+      open: k.open,
+      high: k.high,
+      low: k.low,
+      close: k.close,
+      volume: k.volume || 0,
+    };
+  });
+}
+
+// 进入回测模式：用静态数据替换实时数据
+function enterBacktestMode() {
+  if (!backtestResult.value || !chartRef.value) return;
+  isBacktestMode.value = true;
+  const allBars = backtestKlinesToOHLCV(backtestResult.value.klines);
+  // 初始只显示第一根
+  staticProvider.value = new StaticProvider(allBars.slice(0, 1));
+  chartRef.value.data.registerProvider('static', staticProvider.value);
+  // 切换 symbol 到 static 数据源
+  chartRef.value.setMarket({ symbol: `static:${props.code}`, timeframe: 'D' });
+  currentTF.value = 'D';
+}
+
+// 退出回测模式
+function exitBacktestMode() {
+  isBacktestMode.value = false;
+  staticProvider.value = null;
+  if (chartRef.value) {
+    chartRef.value.setMarket({ symbol: `ashare:${props.code}`, timeframe: currentTF.value });
+  }
+}
+
+// 更新播放位置的K线显示
+function updatePlaybackChart() {
+  if (!staticProvider.value || !backtestResult.value || !chartRef.value) return;
+  const allBars = backtestKlinesToOHLCV(backtestResult.value.klines);
+  const visibleBars = allBars.slice(0, playIndex.value + 1);
+  staticProvider.value.setBars(visibleBars);
+  // 触发重新加载
+  chartRef.value.setMarket({ symbol: `static:${props.code}`, timeframe: 'D' });
+}
+
 function closeBacktestPanel() {
   showBacktestPanel.value = false;
   stopPlay();
+  exitBacktestMode();
 }
 
 // 播放控制
@@ -172,6 +225,7 @@ function startPlay() {
   playTimer = setInterval(() => {
     if (playIndex.value < (backtestResult.value?.klines.length || 0) - 1) {
       playIndex.value++;
+      updatePlaybackChart();
     } else {
       stopPlay();
     }
@@ -189,17 +243,20 @@ function stopPlay() {
 function resetPlay() {
   stopPlay();
   playIndex.value = 0;
+  updatePlaybackChart();
 }
 
 function stepForward() {
   if (backtestResult.value && playIndex.value < backtestResult.value.klines.length - 1) {
     playIndex.value++;
+    updatePlaybackChart();
   }
 }
 
 function stepBackward() {
   if (playIndex.value > 0) {
     playIndex.value--;
+    updatePlaybackChart();
   }
 }
 
@@ -222,6 +279,7 @@ const playProgress = computed(() => {
 function onProgressChange(e: Event) {
   const target = e.target as HTMLInputElement;
   playIndex.value = parseInt(target.value);
+  updatePlaybackChart();
 }
 
 watch(theme, () => {
