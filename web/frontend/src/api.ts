@@ -720,3 +720,59 @@ export async function runPortfolioCheck(): Promise<{ watch_buy: any[]; positions
     return null;
   }
 }
+
+// 单票回测
+export interface BacktestTrade {
+  type: string;
+  date: string;
+  price: number;
+  shares: number;
+  amount: number;
+  profit?: number;
+  reason?: string;
+  params?: any;
+}
+
+export interface BacktestResult {
+  code: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  final_value: number;
+  total_return_pct: number;
+  total_trades: number;
+  win_count: number;
+  loss_count: number;
+  win_rate: number;
+  total_profit: number;
+  avg_profit: number;
+  max_profit: number;
+  max_loss: number;
+  structure_count: number;
+  trades: BacktestTrade[];
+  klines: any[];
+}
+
+export async function runSingleBacktest(
+  code: string,
+  startDate?: string,
+  endDate?: string,
+  initialCapital = 100000,
+): Promise<BacktestResult | null> {
+  try {
+    const resp = await fetch(`/api/screener/backtest/${code}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        start_date: startDate || null,
+        end_date: endDate || null,
+        initial_capital: initialCapital,
+      }),
+    });
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return null;
+  } catch {
+    return null;
+  }
+}

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
 import { Vela } from '@luxalgo/vela';
 import { AShareProvider } from '@/providers/ashare';
 import { theme, toggleTheme } from '@/stores/theme';
 import { isInWatchlist, addToWatchlist, removeFromWatchlist } from '@/stores/watchlist';
-import { fetchStockQuote, fetchIndexQuote, type QuoteData } from '@/api';
+import { fetchStockQuote, fetchIndexQuote, type QuoteData, runSingleBacktest, type BacktestResult } from '@/api';
 import { isIndexCode, getIndexPureCode } from '@/constants';
 import SearchBox from '@/components/SearchBox.vue';
 import QuoteBar from '@/components/QuoteBar.vue';
@@ -36,6 +36,21 @@ const TIMEFRAMES = [
 ];
 
 const inWatchlist = ref(false);
+
+// 回测相关
+const showBacktestModal = ref(false);
+const backtestLoading = ref(false);
+const backtestResult = ref<BacktestResult | null>(null);
+const showBacktestPanel = ref(false);
+const btStartDate = ref('');
+const btEndDate = ref('');
+const btCapital = ref(100000);
+
+// 播放控制
+const isPlaying = ref(false);
+const playIndex = ref(0);
+let playTimer: ReturnType<typeof setInterval> | null = null;
+const playSpeed = ref(500); // 毫秒/根K线
 
 function checkWatchlist() {
   inWatchlist.value = isInWatchlist(props.code);
@@ -75,11 +90,8 @@ function initChart() {
     downColor: '#26a69a',
   });
 
-  // 注册 A 股数据 provider
   const provider = new AShareProvider();
   chartRef.value.data.registerProvider('ashare', provider);
-
-  // 添加成交量副图
   chartRef.value.addNativeIndicator('volume');
 }
 
@@ -92,13 +104,114 @@ function switchTF(tf: string) {
 
 function onSearchSelect(code: string, name: string) {
   emit('back');
-  // 延迟切换，等回到自选列表后再打开新图表
   setTimeout(() => {
     window.dispatchEvent(new CustomEvent('open-chart', { detail: { code, name } }));
   }, 50);
 }
 
-// 主题切换时重建图表
+// 回测功能
+function openBacktestModal() {
+  // 默认回测区间：最近180天
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 180);
+  btStartDate.value = start.toISOString().slice(0, 10);
+  btEndDate.value = end.toISOString().slice(0, 10);
+  showBacktestModal.value = true;
+}
+
+async function startBacktest() {
+  backtestLoading.value = true;
+  showBacktestModal.value = false;
+  try {
+    const result = await runSingleBacktest(
+      props.code,
+      btStartDate.value || undefined,
+      btEndDate.value || undefined,
+      btCapital.value,
+    );
+    if (result) {
+      backtestResult.value = result;
+      showBacktestPanel.value = true;
+      playIndex.value = 0;
+    }
+  } finally {
+    backtestLoading.value = false;
+  }
+}
+
+function closeBacktestPanel() {
+  showBacktestPanel.value = false;
+  stopPlay();
+}
+
+// 播放控制
+function togglePlay() {
+  if (isPlaying.value) {
+    stopPlay();
+  } else {
+    startPlay();
+  }
+}
+
+function startPlay() {
+  if (!backtestResult.value || playIndex.value >= backtestResult.value.klines.length) return;
+  isPlaying.value = true;
+  playTimer = setInterval(() => {
+    if (playIndex.value < (backtestResult.value?.klines.length || 0) - 1) {
+      playIndex.value++;
+    } else {
+      stopPlay();
+    }
+  }, playSpeed.value);
+}
+
+function stopPlay() {
+  isPlaying.value = false;
+  if (playTimer) {
+    clearInterval(playTimer);
+    playTimer = null;
+  }
+}
+
+function resetPlay() {
+  stopPlay();
+  playIndex.value = 0;
+}
+
+function stepForward() {
+  if (backtestResult.value && playIndex.value < backtestResult.value.klines.length - 1) {
+    playIndex.value++;
+  }
+}
+
+function stepBackward() {
+  if (playIndex.value > 0) {
+    playIndex.value--;
+  }
+}
+
+// 当前播放位置的K线和交易信号
+const currentKline = computed(() => {
+  if (!backtestResult.value) return null;
+  return backtestResult.value.klines[playIndex.value] || null;
+});
+
+const currentTrades = computed(() => {
+  if (!backtestResult.value || !currentKline.value) return [];
+  return backtestResult.value.trades.filter(t => t.date === currentKline.value!.date);
+});
+
+const playProgress = computed(() => {
+  if (!backtestResult.value) return 0;
+  return Math.round((playIndex.value / (backtestResult.value.klines.length - 1)) * 100);
+});
+
+function onProgressChange(e: Event) {
+  const target = e.target as HTMLInputElement;
+  playIndex.value = parseInt(target.value);
+}
+
 watch(theme, () => {
   nextTick(() => initChart());
 });
@@ -112,6 +225,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (quoteTimer) clearInterval(quoteTimer);
+  stopPlay();
   if (chartRef.value) {
     chartRef.value.destroy();
     chartRef.value = null;
@@ -134,6 +248,9 @@ onUnmounted(() => {
           {{ tf.label }}
         </button>
       </div>
+      <button class="btn-backtest" @click="openBacktestModal" title="历史回测">
+        📊 回测
+      </button>
       <button class="btn-star" :class="{ active: inWatchlist }" @click="toggleWatch">
         {{ inWatchlist ? '★' : '☆' }}
       </button>
@@ -144,7 +261,141 @@ onUnmounted(() => {
 
     <QuoteBar :quote="quote" :name="name" />
 
-    <div ref="chartContainer" class="chart-container"></div>
+    <div class="chart-body">
+      <div ref="chartContainer" class="chart-container"></div>
+
+      <!-- 回测结果面板 -->
+      <div v-if="showBacktestPanel && backtestResult" class="backtest-panel">
+        <div class="bt-header">
+          <span class="bt-title">📊 回测结果</span>
+          <button class="bt-close" @click="closeBacktestPanel">×</button>
+        </div>
+
+        <!-- 收益统计 -->
+        <div class="bt-stats">
+          <div class="stat-card" :class="{ positive: backtestResult.total_return_pct >= 0, negative: backtestResult.total_return_pct < 0 }">
+            <div class="stat-label">总收益</div>
+            <div class="stat-value">{{ backtestResult.total_return_pct >= 0 ? '+' : '' }}{{ backtestResult.total_return_pct }}%</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">胜率</div>
+            <div class="stat-value">{{ backtestResult.win_rate }}%</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">交易次数</div>
+            <div class="stat-value">{{ backtestResult.total_trades }}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">结构数</div>
+            <div class="stat-value">{{ backtestResult.structure_count }}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">期末资金</div>
+            <div class="stat-value">¥{{ backtestResult.final_value.toLocaleString() }}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">最大盈利</div>
+            <div class="stat-value positive">+¥{{ backtestResult.max_profit.toLocaleString() }}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">最大亏损</div>
+            <div class="stat-value negative">¥{{ backtestResult.max_loss.toLocaleString() }}</div>
+          </div>
+        </div>
+
+        <!-- 播放控制 -->
+        <div class="bt-playback">
+          <button class="play-btn" @click="stepBackward" :disabled="playIndex === 0">⏮</button>
+          <button class="play-btn play-main" @click="togglePlay">
+            {{ isPlaying ? '⏸' : '▶' }}
+          </button>
+          <button class="play-btn" @click="stepForward" :disabled="!backtestResult || playIndex >= backtestResult.klines.length - 1">⏭</button>
+          <button class="play-btn" @click="resetPlay">⏹</button>
+          <input type="range" class="play-slider" :min="0" :max="(backtestResult?.klines.length || 1) - 1" :value="playIndex" @input="onProgressChange" />
+          <span class="play-info">{{ playIndex + 1 }}/{{ backtestResult?.klines.length }}</span>
+          <select v-model="playSpeed" class="speed-select">
+            <option :value="1000">0.5x</option>
+            <option :value="500">1x</option>
+            <option :value="250">2x</option>
+            <option :value="100">5x</option>
+          </select>
+        </div>
+
+        <!-- 当前K线信息 -->
+        <div v-if="currentKline" class="bt-current">
+          <span class="current-date">{{ currentKline.date }}</span>
+          <span>开 {{ currentKline.open }}</span>
+          <span>高 {{ currentKline.high }}</span>
+          <span>低 {{ currentKline.low }}</span>
+          <span>收 {{ currentKline.close }}</span>
+          <span v-if="currentTrades.length" class="trade-signal">
+            <span v-for="t in currentTrades" :key="t.type + t.date" class="signal-badge" :class="t.type">
+              {{ t.type === 'buy' ? '买入' : t.reason || '卖出' }} @{{ t.price }}
+            </span>
+          </span>
+        </div>
+
+        <!-- 交易记录 -->
+        <div class="bt-trades">
+          <div class="trades-title">交易记录</div>
+          <div class="trades-table">
+            <div class="trades-header">
+              <span>日期</span>
+              <span>方向</span>
+              <span>价格</span>
+              <span>数量</span>
+              <span>盈亏</span>
+              <span>原因</span>
+            </div>
+            <div
+              v-for="(t, i) in backtestResult.trades"
+              :key="i"
+              class="trades-row"
+              :class="{ active: currentKline && t.date === currentKline.date }"
+            >
+              <span>{{ t.date }}</span>
+              <span :class="t.type">{{ t.type === 'buy' ? '买入' : '卖出' }}</span>
+              <span>{{ t.price }}</span>
+              <span>{{ t.shares }}</span>
+              <span :class="{ positive: (t.profit || 0) > 0, negative: (t.profit || 0) < 0 }">
+                {{ t.profit !== undefined ? (t.profit > 0 ? '+' : '') + t.profit : '--' }}
+              </span>
+              <span>{{ t.reason || '--' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 回测参数弹窗 -->
+    <div v-if="showBacktestModal" class="modal-overlay" @click.self="showBacktestModal = false">
+      <div class="modal-box">
+        <div class="modal-title">历史回测设置</div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>回测开始日期</label>
+            <input type="date" v-model="btStartDate" />
+          </div>
+          <div class="form-group">
+            <label>回测结束日期</label>
+            <input type="date" v-model="btEndDate" />
+          </div>
+          <div class="form-group">
+            <label>初始资金（元）</label>
+            <input type="number" v-model.number="btCapital" min="10000" step="10000" />
+          </div>
+          <div class="form-hint">
+            策略：底部抬高形态确认后买入，跌破L1减半、跌破L2清仓、达到T止盈
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="showBacktestModal = false">取消</button>
+          <button class="btn-confirm" :disabled="backtestLoading" @click="startBacktest">
+            {{ backtestLoading ? '回测中...' : '开始回测' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -177,6 +428,19 @@ onUnmounted(() => {
 }
 .btn-back:hover {
   background: #2a2e39;
+}
+.btn-backtest {
+  padding: 4px 12px;
+  background: #2962ff;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.btn-backtest:hover {
+  background: #1e53e0;
 }
 .tf-group {
   display: flex;
@@ -232,8 +496,312 @@ onUnmounted(() => {
 .btn-theme:hover {
   background: #2a2e39;
 }
+.chart-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
 .chart-container {
   flex: 1;
   min-height: 0;
+}
+
+/* 回测面板 */
+.backtest-panel {
+  width: 380px;
+  background: #1e222d;
+  border-left: 1px solid #2a2e39;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.bt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a2e39;
+}
+.bt-title {
+  font-weight: 600;
+  color: #d1d4dc;
+  font-size: 14px;
+}
+.bt-close {
+  background: none;
+  border: none;
+  color: #787b86;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+}
+.bt-close:hover {
+  color: #d1d4dc;
+}
+.bt-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px 14px;
+}
+.stat-card {
+  background: #131722;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.stat-label {
+  font-size: 11px;
+  color: #787b86;
+  margin-bottom: 4px;
+}
+.stat-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #d1d4dc;
+}
+.stat-value.positive { color: #ef5350; }
+.stat-value.negative { color: #26a69a; }
+.stat-card.positive .stat-value { color: #ef5350; }
+.stat-card.negative .stat-value { color: #26a69a; }
+
+/* 播放控制 */
+.bt-playback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid #2a2e39;
+  border-bottom: 1px solid #2a2e39;
+}
+.play-btn {
+  width: 28px;
+  height: 28px;
+  background: #2a2e39;
+  border: none;
+  border-radius: 4px;
+  color: #d1d4dc;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.play-btn:hover:not(:disabled) {
+  background: #363a45;
+}
+.play-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.play-btn.play-main {
+  width: 36px;
+  height: 36px;
+  background: #2962ff;
+  font-size: 14px;
+}
+.play-btn.play-main:hover {
+  background: #1e53e0;
+}
+.play-slider {
+  flex: 1;
+  height: 4px;
+  -webkit-appearance: none;
+  background: #363a45;
+  border-radius: 2px;
+  outline: none;
+}
+.play-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  background: #2962ff;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.play-info {
+  font-size: 11px;
+  color: #787b86;
+  min-width: 50px;
+  text-align: center;
+}
+.speed-select {
+  background: #2a2e39;
+  border: 1px solid #363a45;
+  color: #d1d4dc;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 11px;
+}
+
+/* 当前K线信息 */
+.bt-current {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #d1d4dc;
+  border-bottom: 1px solid #2a2e39;
+}
+.current-date {
+  font-weight: 600;
+  color: #2962ff;
+}
+.trade-signal {
+  display: flex;
+  gap: 4px;
+}
+.signal-badge {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.signal-badge.buy {
+  background: rgba(239, 83, 80, 0.2);
+  color: #ef5350;
+}
+.signal-badge.sell {
+  background: rgba(38, 166, 154, 0.2);
+  color: #26a69a;
+}
+
+/* 交易记录 */
+.bt-trades {
+  flex: 1;
+  padding: 10px 14px;
+  overflow-y: auto;
+}
+.trades-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d1d4dc;
+  margin-bottom: 8px;
+}
+.trades-table {
+  font-size: 11px;
+}
+.trades-header {
+  display: grid;
+  grid-template-columns: 70px 40px 50px 40px 60px 1fr;
+  gap: 4px;
+  padding: 6px 4px;
+  color: #787b86;
+  border-bottom: 1px solid #2a2e39;
+  font-weight: 600;
+}
+.trades-row {
+  display: grid;
+  grid-template-columns: 70px 40px 50px 40px 60px 1fr;
+  gap: 4px;
+  padding: 6px 4px;
+  color: #d1d4dc;
+  border-bottom: 1px solid #1a1e28;
+  cursor: pointer;
+}
+.trades-row:hover {
+  background: #2a2e39;
+}
+.trades-row.active {
+  background: rgba(41, 98, 255, 0.2);
+}
+.trades-row .buy { color: #ef5350; }
+.trades-row .sell { color: #26a69a; }
+.trades-row .positive { color: #ef5350; }
+.trades-row .negative { color: #26a69a; }
+
+/* 弹窗 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal-box {
+  background: #1e222d;
+  border-radius: 8px;
+  width: 380px;
+  border: 1px solid #2a2e39;
+}
+.modal-title {
+  padding: 14px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #d1d4dc;
+  border-bottom: 1px solid #2a2e39;
+}
+.modal-body {
+  padding: 18px;
+}
+.form-group {
+  margin-bottom: 14px;
+}
+.form-group label {
+  display: block;
+  font-size: 12px;
+  color: #787b86;
+  margin-bottom: 6px;
+}
+.form-group input {
+  width: 100%;
+  padding: 8px 10px;
+  background: #131722;
+  border: 1px solid #363a45;
+  border-radius: 4px;
+  color: #d1d4dc;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.form-group input:focus {
+  outline: none;
+  border-color: #2962ff;
+}
+.form-hint {
+  font-size: 11px;
+  color: #787b86;
+  margin-top: 10px;
+  line-height: 1.5;
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px;
+  border-top: 1px solid #2a2e39;
+}
+.btn-cancel {
+  padding: 7px 16px;
+  background: transparent;
+  border: 1px solid #363a45;
+  border-radius: 4px;
+  color: #d1d4dc;
+  cursor: pointer;
+  font-size: 13px;
+}
+.btn-cancel:hover {
+  background: #2a2e39;
+}
+.btn-confirm {
+  padding: 7px 16px;
+  background: #2962ff;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.btn-confirm:hover:not(:disabled) {
+  background: #1e53e0;
+}
+.btn-confirm:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>

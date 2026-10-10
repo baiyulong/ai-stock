@@ -12,6 +12,7 @@ from db import get_screen_result, get_latest_run_id
 from scheduler import start_scheduler, get_invalidation_alerts, run_invalidation_check
 import scheduler
 from backtest import run_backtest
+from single_backtest import run_single_backtest
 from monitor import run_monitor, get_monitor_results, get_alerts
 from portfolio import (
     run_portfolio_check, check_watch_buy, check_positions,
@@ -41,6 +42,12 @@ class SyncRequest(BaseModel):
 class WebhookConfig(BaseModel):
     url: str
     enabled: bool = True
+
+
+class SingleBacktestRequest(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    initial_capital: float = 100000.0
 
 
 # Webhook 配置（启动时从数据库加载）
@@ -213,6 +220,21 @@ async def run_backtest_endpoint(as_of_days_ago: int = 20, hold_days: int = 20):
     """执行策略回测"""
     try:
         result = run_backtest(as_of_days_ago=as_of_days_ago, hold_days=hold_days)
+        return {"code": 0, "message": "success", "data": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/screener/backtest/{code}")
+async def run_single_backtest_endpoint(code: str, req: SingleBacktestRequest):
+    """单票逐K线回测"""
+    try:
+        result = run_single_backtest(
+            code=code,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            initial_capital=req.initial_capital,
+        )
         return {"code": 0, "message": "success", "data": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
