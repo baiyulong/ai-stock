@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
-import { Vela, registerNativeIndicator } from '@luxalgo/vela';
+import { Vela, registerNativeIndicator, SecondClock } from '@luxalgo/vela';
 import { AShareProvider, StaticProvider } from '@/providers/ashare';
 
 // 全局存储买卖点数据，供 NativeIndicator 读取
@@ -146,6 +146,11 @@ function initChart() {
     upColor: '#ef5350',
     downColor: '#26a69a',
   });
+
+  // 设置实时时钟为本地时间（Vela默认用UTC显示时间）
+  const tzOffset = new Date().getTimezoneOffset() * 60 * 1000;
+  const localClock = new SecondClock(() => Date.now() - tzOffset);
+  (chartRef.value as any).setWallClock(localClock);
 
   const provider = new AShareProvider();
   chartRef.value.data.registerProvider('ashare', provider);
