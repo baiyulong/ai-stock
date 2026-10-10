@@ -1,7 +1,67 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
-import { Vela, createDrawing } from '@luxalgo/vela';
+import { Vela, registerNativeIndicator } from '@luxalgo/vela';
 import { AShareProvider, StaticProvider } from '@/providers/ashare';
+
+// 全局存储买卖点数据，供 NativeIndicator 读取
+let tradeMarkersData: Array<{ date: string; price: number; type: string }> = [];
+
+// 注册买卖点标记指标
+registerNativeIndicator({
+  type: 'trade_markers',
+  title: 'Trade Markers',
+  shortTitle: 'TM',
+  paneHint: 'price',
+  overlay: true,
+  legend: false,
+  multiInstance: false,
+  inputsSchema: () => [],
+  defaultInputs: () => ({}),
+  create: () => {
+    let ctx: any = null;
+    const emitMarkers = () => {
+      if (!ctx) return;
+      const tzOffset = new Date().getTimezoneOffset() * 60 * 1000;
+      const labels = tradeMarkersData.map((trade, idx) => {
+        const time = new Date(trade.date + 'T15:00:00+08:00').getTime() - tzOffset;
+        const isBuy = trade.type === 'buy';
+        return {
+          id: `tm_${idx}`,
+          paneId: 'price',
+          xloc: 'bar_time',
+          x: time,
+          y: trade.price,
+          yloc: 'price',
+          text: isBuy ? 'B' : 'S',
+          style: {},
+          color: isBuy ? '#ef5350' : '#26a69a',
+          textColor: '#ffffff',
+          size: 'normal',
+          textAlign: 'center',
+          fontFamily: 'default',
+          tooltip: `${isBuy ? '买入' : '卖出'} ${trade.date} @ ${trade.price}`,
+        };
+      });
+      ctx.emit({ labels });
+    };
+    return {
+      start(context: any) {
+        ctx = context;
+        emitMarkers();
+      },
+      onBars() {
+        emitMarkers();
+      },
+      onViewport() {},
+      setInputs() {},
+      suspend() {},
+      resume() {
+        emitMarkers();
+      },
+      stop() {},
+    };
+  },
+});
 import { theme, toggleTheme } from '@/stores/theme';
 import { isInWatchlist, addToWatchlist, removeFromWatchlist } from '@/stores/watchlist';
 import { fetchStockQuote, fetchIndexQuote, type QuoteData, runSingleBacktest, type BacktestResult } from '@/api';
@@ -201,51 +261,36 @@ function updatePlaybackChart() {
   // 面板信息通过 computed 属性自动更新
 }
 
-// 在K线图上绘制买卖点标记
+// 在K线图上绘制买卖点标记（通过 NativeIndicator）
 function drawTradeMarkers() {
   if (!chartRef.value || !backtestResult.value) return;
+  // 设置全局买卖点数据
+  tradeMarkersData = backtestResult.value.trades.map(t => ({
+    date: t.date,
+    price: t.price,
+    type: t.type,
+  }));
+  // 添加指标（如果已存在则先移除）
   const chart = chartRef.value as any;
-  // 清除旧标记（通过 text content 识别）
-  if (chart.drawings) {
-    const existing = chart.drawings.all();
-    existing.forEach((d: any) => {
-      if (d.text && (d.text.content === 'B' || d.text.content === 'S')) {
-        chart.drawings.remove(d.id);
+  try {
+    // 尝试移除已存在的指标
+    const indicators = chart.indicators?.list?.() || [];
+    indicators.forEach((ind: any) => {
+      if (ind.type === 'trade_markers') {
+        chart.removeIndicator?.(ind.handle || ind.id);
       }
     });
+  } catch (e) {
+    // ignore
   }
-
-  const tzOffset = new Date().getTimezoneOffset() * 60 * 1000;
-  const trades = backtestResult.value.trades;
-
-  trades.forEach((trade) => {
-    const time = new Date(trade.date + 'T15:00:00+08:00').getTime() - tzOffset;
-    const isBuy = trade.type === 'buy';
-    const label = isBuy ? 'B' : 'S';
-    const color = isBuy ? '#ef5350' : '#26a69a';
-    const price = trade.price;
-
+  // 添加新指标
+  setTimeout(() => {
     try {
-      const drawing = createDrawing('text', {
-        paneId: 'price',
-        anchors: [{ time, price }],
-        text: {
-          content: label,
-          color,
-          fontSize: 14,
-          bold: true,
-        },
-        style: {
-          color,
-        },
-      } as any);
-      if (drawing && chart.drawings) {
-        chart.drawings.add(drawing);
-      }
+      chart.addNativeIndicator('trade_markers');
     } catch (e) {
-      console.warn('Failed to draw trade marker:', e);
+      console.warn('Failed to add trade_markers indicator:', e);
     }
-  });
+  }, 300);
 }
 
 function closeBacktestPanel() {
