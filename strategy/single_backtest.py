@@ -76,6 +76,7 @@ def run_single_backtest(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     initial_capital: float = 100000.0,
+    fee_rate: float = 0.00025,
 ) -> dict:
     """单票逐K线回测
 
@@ -84,6 +85,7 @@ def run_single_backtest(
         start_date: 回测开始日期 YYYY-MM-DD
         end_date: 回测结束日期 YYYY-MM-DD
         initial_capital: 初始资金
+        fee_rate: 手续费率（双边），默认万2.5
 
     Returns:
         回测结果，包含交易记录、收益统计、K线数据（带买卖标记）
@@ -173,8 +175,10 @@ def run_single_backtest(
                         shares = (shares // 100) * 100  # 整手
 
                         cost = shares * buy_price
-                        if cost <= cash and shares > 0:
-                            cash -= cost
+                        fee = cost * fee_rate
+                        total_cost = cost + fee
+                        if total_cost <= cash and shares > 0:
+                            cash -= total_cost
                             position = shares
                             position_price = buy_price
                             half_sold = False
@@ -185,6 +189,7 @@ def run_single_backtest(
                                 "price": round(buy_price, 2),
                                 "shares": shares,
                                 "amount": round(cost, 2),
+                                "fee": round(fee, 2),
                                 "mode": buy_mode,
                                 "params": trade_params,
                             })
@@ -201,8 +206,10 @@ def run_single_backtest(
             if low <= trade_params["L2"]:
                 sell_price = trade_params["L2"]
                 proceeds = position * sell_price
-                profit = (sell_price - position_price) * position
-                cash += proceeds
+                fee = proceeds * fee_rate
+                net_proceeds = proceeds - fee
+                profit = (sell_price - position_price) * position - fee
+                cash += net_proceeds
                 sell_signals.append((date, sell_price, "硬止损清仓"))
                 trades.append({
                     "type": "sell",
@@ -210,6 +217,7 @@ def run_single_backtest(
                     "price": sell_price,
                     "shares": position,
                     "amount": round(proceeds, 2),
+                    "fee": round(fee, 2),
                     "profit": round(profit, 2),
                     "reason": "硬止损清仓",
                 })
@@ -225,8 +233,10 @@ def run_single_backtest(
                 if sell_shares > 0:
                     sell_price = trade_params["L1"]
                     proceeds = sell_shares * sell_price
-                    profit = (sell_price - position_price) * sell_shares
-                    cash += proceeds
+                    fee = proceeds * fee_rate
+                    net_proceeds = proceeds - fee
+                    profit = (sell_price - position_price) * sell_shares - fee
+                    cash += net_proceeds
                     position -= sell_shares
                     half_sold = True
                     sell_signals.append((date, sell_price, "先导止损减半"))
@@ -236,6 +246,7 @@ def run_single_backtest(
                         "price": sell_price,
                         "shares": sell_shares,
                         "amount": round(proceeds, 2),
+                        "fee": round(fee, 2),
                         "profit": round(profit, 2),
                         "reason": "先导止损减半",
                     })
@@ -244,8 +255,10 @@ def run_single_backtest(
             elif high >= trade_params["T"]:
                 sell_price = trade_params["T"]
                 proceeds = position * sell_price
-                profit = (sell_price - position_price) * position
-                cash += proceeds
+                fee = proceeds * fee_rate
+                net_proceeds = proceeds - fee
+                profit = (sell_price - position_price) * position - fee
+                cash += net_proceeds
                 sell_signals.append((date, sell_price, "止盈清仓"))
                 trades.append({
                     "type": "sell",
@@ -253,6 +266,7 @@ def run_single_backtest(
                     "price": sell_price,
                     "shares": position,
                     "amount": round(proceeds, 2),
+                    "fee": round(fee, 2),
                     "profit": round(profit, 2),
                     "reason": "止盈清仓",
                 })
@@ -266,8 +280,10 @@ def run_single_backtest(
         last_close = float(df.iloc[-1]["close"])
         last_date = str(df.iloc[-1]["date"])[:10]
         proceeds = position * last_close
-        profit = (last_close - position_price) * position
-        cash += proceeds
+        fee = proceeds * fee_rate
+        net_proceeds = proceeds - fee
+        profit = (last_close - position_price) * position - fee
+        cash += net_proceeds
         sell_signals.append((last_date, last_close, "回测结束平仓"))
         trades.append({
             "type": "sell",
@@ -275,6 +291,7 @@ def run_single_backtest(
             "price": last_close,
             "shares": position,
             "amount": round(proceeds, 2),
+            "fee": round(fee, 2),
             "profit": round(profit, 2),
             "reason": "回测结束平仓",
         })

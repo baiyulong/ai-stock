@@ -48,6 +48,7 @@ class SingleBacktestRequest(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     initial_capital: float = 100000.0
+    fee_rate: float = 0.00025
 
 
 # Webhook 配置（启动时从数据库加载）
@@ -234,6 +235,7 @@ async def run_single_backtest_endpoint(code: str, req: SingleBacktestRequest):
             start_date=req.start_date,
             end_date=req.end_date,
             initial_capital=req.initial_capital,
+            fee_rate=req.fee_rate,
         )
         return {"code": 0, "message": "success", "data": result}
     except Exception as e:

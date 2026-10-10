@@ -107,12 +107,7 @@ const showBacktestPanel = ref(false);
 const btStartDate = ref('');
 const btEndDate = ref('');
 const btCapital = ref(100000);
-
-// 播放控制
-const isPlaying = ref(false);
-const playIndex = ref(0);
-let playTimer: ReturnType<typeof setInterval> | null = null;
-const playSpeed = ref(500); // 毫秒/根K线
+const btFeeRate = ref(0.00025); // 手续费率，默认万2.5
 
 function checkWatchlist() {
   inWatchlist.value = isInWatchlist(props.code);
@@ -193,6 +188,7 @@ async function startBacktest() {
       btStartDate.value || undefined,
       btEndDate.value || undefined,
       btCapital.value,
+      btFeeRate.value,
     );
     if (result) {
       if (result.error) {
@@ -205,7 +201,6 @@ async function startBacktest() {
       }
       backtestResult.value = result;
       showBacktestPanel.value = true;
-      playIndex.value = 0;
       // 切换到回测模式
       enterBacktestMode();
     } else {
@@ -255,12 +250,6 @@ function exitBacktestMode() {
   }
 }
 
-// 更新播放位置（K线显示全部，只更新面板信息）
-function updatePlaybackChart() {
-  // K线图显示全部回测数据，不需要更新
-  // 面板信息通过 computed 属性自动更新
-}
-
 // 在K线图上绘制买卖点标记（通过 NativeIndicator）
 function drawTradeMarkers() {
   if (!chartRef.value || !backtestResult.value) return;
@@ -295,86 +284,7 @@ function drawTradeMarkers() {
 
 function closeBacktestPanel() {
   showBacktestPanel.value = false;
-  stopPlay();
   exitBacktestMode();
-}
-
-// 播放控制
-function togglePlay() {
-  if (isPlaying.value) {
-    stopPlay();
-  } else {
-    startPlay();
-  }
-}
-
-function startPlay() {
-  if (!backtestResult.value || playIndex.value >= backtestResult.value.klines.length) return;
-  isPlaying.value = true;
-  playTimer = setInterval(() => {
-    if (playIndex.value < (backtestResult.value?.klines.length || 0) - 1) {
-      playIndex.value++;
-      updatePlaybackChart();
-    } else {
-      stopPlay();
-    }
-  }, playSpeed.value);
-}
-
-function stopPlay() {
-  isPlaying.value = false;
-  if (playTimer) {
-    clearInterval(playTimer);
-    playTimer = null;
-  }
-}
-
-function resetPlay() {
-  stopPlay();
-  playIndex.value = 0;
-  updatePlaybackChart();
-}
-
-function stepForward() {
-  if (backtestResult.value && playIndex.value < backtestResult.value.klines.length - 1) {
-    playIndex.value++;
-    updatePlaybackChart();
-  }
-}
-
-function stepBackward() {
-  if (playIndex.value > 0) {
-    playIndex.value--;
-    updatePlaybackChart();
-  }
-}
-
-// 当前播放位置的K线和交易信号
-const currentKline = computed(() => {
-  if (!backtestResult.value) return null;
-  return backtestResult.value.klines[playIndex.value] || null;
-});
-
-const currentTrades = computed(() => {
-  if (!backtestResult.value || !currentKline.value) return [];
-  return backtestResult.value.trades.filter(t => t.date === currentKline.value!.date);
-});
-
-const playProgress = computed(() => {
-  if (!backtestResult.value) return 0;
-  return Math.round((playIndex.value / (backtestResult.value.klines.length - 1)) * 100);
-});
-
-// 当前播放位置可见的交易记录
-const visibleTrades = computed(() => {
-  if (!backtestResult.value || !currentKline.value) return [];
-  return backtestResult.value.trades.filter(t => t.date <= currentKline.value!.date);
-});
-
-function onProgressChange(e: Event) {
-  const target = e.target as HTMLInputElement;
-  playIndex.value = parseInt(target.value);
-  updatePlaybackChart();
 }
 
 watch(theme, () => {
@@ -390,7 +300,6 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (quoteTimer) clearInterval(quoteTimer);
-  stopPlay();
   if (chartRef.value) {
     chartRef.value.destroy();
     chartRef.value = null;
@@ -399,7 +308,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="chart-view">
+  <div class="chart-view" :class="{ light: theme === 'light' }">
     <div class="chart-header">
       <button class="btn-back" @click="emit('back')">←</button>
       <SearchBox @select="onSearchSelect" />
@@ -468,41 +377,9 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 播放控制 -->
-        <div class="bt-playback">
-          <button class="play-btn" @click="stepBackward" :disabled="playIndex === 0">⏮</button>
-          <button class="play-btn play-main" @click="togglePlay">
-            {{ isPlaying ? '⏸' : '▶' }}
-          </button>
-          <button class="play-btn" @click="stepForward" :disabled="!backtestResult || playIndex >= backtestResult.klines.length - 1">⏭</button>
-          <button class="play-btn" @click="resetPlay">⏹</button>
-          <input type="range" class="play-slider" :min="0" :max="(backtestResult?.klines.length || 1) - 1" :value="playIndex" @input="onProgressChange" />
-          <span class="play-info">{{ playIndex + 1 }}/{{ backtestResult?.klines.length }}</span>
-          <select v-model="playSpeed" class="speed-select">
-            <option :value="1000">0.5x</option>
-            <option :value="500">1x</option>
-            <option :value="250">2x</option>
-            <option :value="100">5x</option>
-          </select>
-        </div>
-
-        <!-- 当前K线信息 -->
-        <div v-if="currentKline" class="bt-current">
-          <span class="current-date">{{ currentKline.date }}</span>
-          <span>开 {{ currentKline.open }}</span>
-          <span>高 {{ currentKline.high }}</span>
-          <span>低 {{ currentKline.low }}</span>
-          <span>收 {{ currentKline.close }}</span>
-          <span v-if="currentTrades.length" class="trade-signal">
-            <span v-for="t in currentTrades" :key="t.type + t.date" class="signal-badge" :class="t.type">
-              {{ t.type === 'buy' ? '买入' : t.reason || '卖出' }} @{{ t.price }}
-            </span>
-          </span>
-        </div>
-
         <!-- 交易记录 -->
         <div class="bt-trades">
-          <div class="trades-title">交易记录</div>
+          <div class="trades-title">交易记录（{{ backtestResult.trades.length }}笔）</div>
           <div class="trades-table">
             <div class="trades-header">
               <span>日期</span>
@@ -513,10 +390,9 @@ onUnmounted(() => {
               <span>原因</span>
             </div>
             <div
-              v-for="(t, i) in visibleTrades"
+              v-for="(t, i) in backtestResult.trades"
               :key="i"
               class="trades-row"
-              :class="{ active: currentKline && t.date === currentKline.date }"
             >
               <span>{{ t.date }}</span>
               <span :class="t.type">{{ t.type === 'buy' ? '买入' : '卖出' }}</span>
@@ -548,6 +424,10 @@ onUnmounted(() => {
           <div class="form-group">
             <label>初始资金（元）</label>
             <input type="number" v-model.number="btCapital" min="10000" step="10000" />
+          </div>
+          <div class="form-group">
+            <label>手续费率（如0.00025=万2.5）</label>
+            <input type="number" v-model.number="btFeeRate" min="0" step="0.00001" />
           </div>
           <div class="form-hint">
             策略：底部抬高形态确认后买入，跌破L1减半、跌破L2清仓、达到T止盈
@@ -968,5 +848,100 @@ onUnmounted(() => {
 .btn-confirm:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* 浅色主题 */
+.chart-view.light {
+  background: #ffffff;
+}
+.chart-view.light .chart-header {
+  border-bottom-color: #e0e0e0;
+}
+.chart-view.light .btn-back,
+.chart-view.light .btn-star,
+.chart-view.light .btn-theme,
+.chart-view.light .btn-backtest {
+  color: #333;
+  border-color: #ddd;
+}
+.chart-view.light .btn-back:hover,
+.chart-view.light .btn-star:hover,
+.chart-view.light .btn-theme:hover {
+  background: #f5f5f5;
+}
+.chart-view.light .tf-group {
+  background: #f0f0f0;
+}
+.chart-view.light .tf-group button {
+  color: #666;
+}
+.chart-view.light .backtest-panel {
+  background: #fafafa;
+  border-left-color: #e0e0e0;
+}
+.chart-view.light .bt-header {
+  border-bottom-color: #e0e0e0;
+}
+.chart-view.light .bt-title {
+  color: #333;
+}
+.chart-view.light .bt-close {
+  color: #999;
+}
+.chart-view.light .bt-close:hover {
+  color: #333;
+}
+.chart-view.light .stat-card {
+  background: #fff;
+  border: 1px solid #eee;
+}
+.chart-view.light .stat-label {
+  color: #999;
+}
+.chart-view.light .stat-value {
+  color: #333;
+}
+.chart-view.light .trades-title {
+  color: #333;
+}
+.chart-view.light .trades-header {
+  background: #f5f5f5;
+  color: #666;
+  border-bottom-color: #e0e0e0;
+}
+.chart-view.light .trades-row {
+  border-bottom-color: #eee;
+  color: #333;
+}
+.chart-view.light .trades-row:hover {
+  background: #f0f7ff;
+}
+.chart-view.light .modal-box {
+  background: #fff;
+}
+.chart-view.light .modal-title {
+  color: #333;
+  border-bottom-color: #e0e0e0;
+}
+.chart-view.light .form-group label {
+  color: #666;
+}
+.chart-view.light .form-group input {
+  background: #fff;
+  border-color: #ddd;
+  color: #333;
+}
+.chart-view.light .form-hint {
+  color: #999;
+}
+.chart-view.light .modal-footer {
+  border-top-color: #e0e0e0;
+}
+.chart-view.light .btn-cancel {
+  color: #333;
+  border-color: #ddd;
+}
+.chart-view.light .btn-cancel:hover {
+  background: #f5f5f5;
 }
 </style>

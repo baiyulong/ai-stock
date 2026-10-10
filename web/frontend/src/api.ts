@@ -759,6 +759,7 @@ export async function runSingleBacktest(
   startDate?: string,
   endDate?: string,
   initialCapital = 100000,
+  feeRate = 0.00025,
 ): Promise<BacktestResult | null> {
   try {
     const resp = await fetch(`/api/screener/backtest/${code}`, {
@@ -768,6 +769,7 @@ export async function runSingleBacktest(
         start_date: startDate || null,
         end_date: endDate || null,
         initial_capital: initialCapital,
+        fee_rate: feeRate,
       }),
     });
     const json = await resp.json();
