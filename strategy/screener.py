@@ -11,6 +11,7 @@ from config import (
 )
 from db import load_day_klines, load_stock_info, save_screen_result
 from indicators import add_rolling_indicators, get_latest_per_stock, calc_tier_indicators, get_second_low_dates
+from industry import get_industries
 
 
 def run_screener() -> dict:
@@ -102,18 +103,24 @@ def run_screener() -> dict:
     # 9. 统计
     tier_counts = pool["tier"].value_counts().to_dict()
 
+    # 10. 获取行业信息
+    codes = pool["code"].tolist()
+    industries = get_industries(codes) if codes else {}
+
     return {
         "run_id": run_id,
         "run_at": run_at,
         "total_scanned": int(len(latest)),
         "pool_count": int(len(pool)),
         "tier_counts": tier_counts,
-        "results": format_results(pool),
+        "results": format_results(pool, industries),
     }
 
 
-def format_results(df: pd.DataFrame) -> list:
+def format_results(df: pd.DataFrame, industries: dict = None) -> list:
     """格式化结果为 JSON 友好的列表"""
+    if industries is None:
+        industries = {}
     cols = [
         "code", "name", "tier",
         "low_raise_pct", "rebound_pct", "room_pct",
@@ -131,5 +138,6 @@ def format_results(df: pd.DataFrame) -> list:
             elif pd.isna(v):
                 v = None
             item[c] = v
+        item["industry"] = industries.get(row.get("code"), "")
         result.append(item)
     return result

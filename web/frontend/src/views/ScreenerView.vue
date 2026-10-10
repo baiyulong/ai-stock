@@ -230,6 +230,7 @@ onUnmounted(() => {
           <tr>
             <th class="col-name">名称/代码</th>
             <th class="col-num">分层</th>
+            <th class="col-num">行业</th>
             <th class="col-num sortable" @click="handleSort('low_raise_pct')">低点抬升{{ sortArrow('low_raise_pct') }}</th>
             <th class="col-num sortable" @click="handleSort('rebound_pct')">距低点回升{{ sortArrow('rebound_pct') }}</th>
             <th class="col-num sortable" @click="handleSort('room_pct')">距高点空间{{ sortArrow('room_pct') }}</th>
@@ -253,6 +254,7 @@ onUnmounted(() => {
             <td class="col-num">
               <span :class="['tier-badge', tierClass(row.tier)]">{{ tierLabel(row.tier) }}</span>
             </td>
+            <td class="col-num industry">{{ row.industry || '--' }}</td>
             <td class="col-num positive">{{ fmtPct(row.low_raise_pct) }}</td>
             <td class="col-num" :class="{ positive: row.rebound_pct >= 15 }">{{ fmtPct(row.rebound_pct) }}</td>
             <td class="col-num" :class="{ negative: row.room_pct <= 15 }">{{ fmtPct(row.room_pct) }}</td>
@@ -265,7 +267,7 @@ onUnmounted(() => {
             </td>
           </tr>
           <tr v-if="filteredResults.length === 0">
-            <td colspan="10" class="sc-empty">
+            <td colspan="11" class="sc-empty">
               {{ loading ? '正在选股...' : '暂无结果，点击"执行选股"开始' }}
             </td>
           </tr>
@@ -644,6 +646,15 @@ onUnmounted(() => {
 .tier-complete { background: #26a69a; color: #fff; }
 .tier-partial { background: #f2994a; color: #fff; }
 .tier-pool { background: #787b86; color: #fff; }
+
+.industry {
+  font-size: 12px;
+  color: var(--text-secondary, #787b86);
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .positive { color: #ef5350; }
 .negative { color: #26a69a; }

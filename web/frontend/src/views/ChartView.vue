@@ -147,14 +147,25 @@ function initChart() {
     downColor: '#26a69a',
   });
 
-  // 设置实时时钟为本地时间（Vela默认用UTC显示时间）
-  const tzOffset = new Date().getTimezoneOffset() * 60 * 1000;
-  const localClock = new SecondClock(() => Date.now() - tzOffset);
-  (chartRef.value as any).setWallClock(localClock);
-
   const provider = new AShareProvider();
   chartRef.value.data.registerProvider('ashare', provider);
   chartRef.value.addNativeIndicator('volume');
+
+  // 设置实时时钟为本地时间（Vela默认用UTC显示时间）
+  nextTick(() => {
+    try {
+      const tzOffset = new Date().getTimezoneOffset() * 60 * 1000;
+      const localClock = new SecondClock(() => Date.now() - tzOffset);
+      const chart = chartRef.value as any;
+      if (chart.setWallClock) {
+        chart.setWallClock(localClock);
+      } else if (chart.renderer?.setWallClock) {
+        chart.renderer.setWallClock(localClock);
+      }
+    } catch (e) {
+      console.warn('setWallClock failed:', e);
+    }
+  });
 }
 
 function switchTF(tf: string) {

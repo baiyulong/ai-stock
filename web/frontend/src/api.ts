@@ -183,6 +183,7 @@ export interface ScreenerResult {
   code: string;
   name: string;
   tier: 'complete' | 'partial' | 'pool_only';
+  industry?: string;
   low_raise_pct: number;
   rebound_pct: number;
   room_pct: number;
