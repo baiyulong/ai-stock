@@ -1,2 +1,28 @@
 web/frontend/node_modules/
 
+# 编译产物
+web/server.exe
+web/server.exe~
+web/static/assets/
+
+# 数据库文件
+web/data/database/*.db
+web/data/duckdb/*.duckdb
+strategy/screener_results.db
+
+# 临时脚本
+read_docx.py
+verify_duckdb.py
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

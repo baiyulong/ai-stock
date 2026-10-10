@@ -51,15 +51,21 @@ export class AShareProvider implements DataProvider {
     if (json.code !== 0 || !json.data?.List) return [];
 
     // tdx 倒序 -> Vela 正序，价格厘 -> 元
+    // Vela 用 UTC 格式化显示时间，需加上本地时区偏移，使显示为本地时间
+    const tzOffset = new Date().getTimezoneOffset() * 60 * 1000; // 本地时区偏移（毫秒）
     return json.data.List
-      .map((k) => ({
-        time: Date.parse(k.Time),
-        open: k.Open / 1000,
-        high: k.High / 1000,
-        low: k.Low / 1000,
-        close: k.Close / 1000,
-        volume: k.Volume || 0,
-      }))
+      .map((k) => {
+        // 后端返回 ISO 格式 "2026-09-28T15:00:00+08:00"，自带时区，直接解析
+        const time = new Date(k.Time).getTime();
+        return {
+          time: isNaN(time) ? Date.now() : time - tzOffset,
+          open: k.Open / 1000,
+          high: k.High / 1000,
+          low: k.Low / 1000,
+          close: k.Close / 1000,
+          volume: k.Volume || 0,
+        };
+      })
       .reverse()
       .sort((a, b) => a.time - b.time);
   }

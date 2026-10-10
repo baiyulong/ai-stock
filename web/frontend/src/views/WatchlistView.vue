@@ -87,9 +87,8 @@ onUnmounted(() => {
             v-for="item in watchlist"
             :key="item.code"
             class="wl-row"
-            @click="onOpenChart(item.code, item.name)"
           >
-            <td class="col-name">
+            <td class="col-name" @click="onOpenChart(item.code, item.name)">
               <div class="cell-name">{{ item.name }}</div>
               <div class="cell-code">{{ item.code }}</div>
             </td>
@@ -233,12 +232,13 @@ onUnmounted(() => {
 }
 .wl-table td.col-name {
   text-align: left;
+  cursor: pointer;
+}
+.wl-table td.col-name:hover .cell-name {
+  color: #2962ff;
 }
 .wl-table td.col-op {
   text-align: center;
-}
-.wl-row {
-  cursor: pointer;
 }
 .wl-row:hover {
   background: #1e222d;
@@ -251,7 +251,6 @@ onUnmounted(() => {
 .cell-code {
   font-size: 11px;
   color: #787b86;
-  font-family: monospace;
   margin-top: 2px;
 }
 .col-num.up { color: #ef5350; }

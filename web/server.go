@@ -14,6 +14,8 @@ import (
 	"github.com/injoyai/tdx"
 	"github.com/injoyai/tdx/extend"
 	"github.com/injoyai/tdx/protocol"
+	"web/duckdb"
+	"web/screener"
 )
 
 var (
@@ -50,15 +52,25 @@ func init() {
 		Number: 4,
 	})
 	if err != nil {
-		log.Fatalf("初始化数据管理器失败: %v", err)
+		log.Printf("初始化数据管理器失败（将使用单连接模式）: %v", err)
+		manager = nil
+	} else {
+		if err := manager.Codes.Update(); err != nil {
+			log.Printf("更新管理器代码库失败: %v", err)
+		}
+		if err := manager.Workday.Update(); err != nil {
+			log.Printf("更新交易日数据失败: %v", err)
+		}
+		manager.Cron.Start()
 	}
-	if err := manager.Codes.Update(); err != nil {
-		log.Printf("更新管理器代码库失败: %v", err)
+
+	// 初始化 DuckDB（选股策略用）
+	duckdbPath := filepath.Join(tdx.DefaultDatabaseDir, "..", "duckdb", "market.duckdb")
+	if _, err := duckdb.Init(duckdbPath); err != nil {
+		log.Printf("初始化 DuckDB 失败: %v", err)
+	} else {
+		log.Println("DuckDB 初始化成功")
 	}
-	if err := manager.Workday.Update(); err != nil {
-		log.Printf("更新交易日数据失败: %v", err)
-	}
-	manager.Cron.Start()
 }
 
 // Response 统一响应结构
@@ -809,6 +821,18 @@ func main() {
 	http.HandleFunc("/api/tasks/pull-trade", handleCreatePullTradeTask)
 	http.HandleFunc("/api/tasks", handleListTasks)
 	http.HandleFunc("/api/tasks/", handleTaskOperations)
+
+	// 选股策略相关
+	http.HandleFunc("/api/screener/sync", screener.HandleSync(manager, client))
+	http.HandleFunc("/api/screener/sync-status", screener.HandleSyncStatus)
+	http.HandleFunc("/api/screener/db-stats", screener.HandleDBStats)
+	http.HandleFunc("/api/screener/export-kline", screener.HandleExportKline)
+	http.HandleFunc("/api/screener/stock-info", screener.HandleExportStockInfo)
+	http.HandleFunc("/api/screener/health", screener.HandleStrategyHealth)
+	// 其余 /api/screener/* 反向代理到 Python 策略服务
+	http.HandleFunc("/api/screener/", screener.HandleStrategyProxy)
+	// /api/portfolio/* 反向代理到 Python 策略服务（待买/持仓/告警）
+	http.HandleFunc("/api/portfolio/", screener.HandleStrategyProxy)
 
 	port := ":18080"
 	log.Printf("服务启动成功，访问 http://localhost%s\n", port)

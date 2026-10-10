@@ -174,3 +174,549 @@ export function formatAmount(v: number): string {
   if (v >= 10000) return (v / 10000).toFixed(2) + '万';
   return v.toFixed(0);
 }
+
+// ===== 选股策略相关 =====
+
+const STRATEGY_BASE = 'http://127.0.0.1:18081';
+
+export interface ScreenerResult {
+  code: string;
+  name: string;
+  tier: 'complete' | 'partial' | 'pool_only';
+  low_raise_pct: number;
+  rebound_pct: number;
+  room_pct: number;
+  last_close: number;
+  low_60: number;
+  low_prev40: number;
+  low_60_date?: string;
+  high_100: number;
+  low_100: number;
+  avg_amount_10: number;
+  avg_amount_100: number;
+}
+
+export interface ScreenerRunResult {
+  run_id: string;
+  run_at: string;
+  total_scanned: number;
+  pool_count: number;
+  tier_counts: Record<string, number>;
+  results: ScreenerResult[];
+}
+
+export interface StockDetail {
+  basic: {
+    code: string;
+    last_close: number;
+    last_date: string;
+    high_100: number;
+    low_100: number;
+    low_60: number;
+    low_prev40: number;
+    ma60: number;
+  };
+  pool_checks: {
+    structure_double_window: boolean;
+    new_high_confirm: boolean;
+    amplitude: boolean;
+    liquidity: boolean;
+    all_pass: boolean;
+  };
+  tier_indicators: {
+    low_raise_pct: number;
+    rebound_pct: number;
+    room_pct: number;
+    avg_amount_10: number;
+    rebound_pass: boolean;
+    room_pass: boolean;
+    volume_pass: boolean;
+  };
+  confirmations: {
+    support: { pass: boolean; support_line: number; description: string };
+    volume_breakout: { pass: boolean; breakout_date: string; volume_ratio: number; description: string };
+    ma_turn: { pass: boolean; ma60_slope: number; description: string };
+    all_pass: boolean;
+  };
+  invalidation: {
+    invalidated: boolean;
+    critical_line: number;
+    invalidate_price: number;
+    current_close: number;
+    description: string;
+  };
+  klines: Array<{
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    amount: number;
+  }>;
+}
+
+// 执行选股
+export async function runScreener(): Promise<ScreenerRunResult | null> {
+  try {
+    const resp = await fetch(`${STRATEGY_BASE}/api/screener/run`, { method: 'POST' });
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// 获取选股结果
+export async function getScreenerResults(runId?: string): Promise<ScreenerResult[]> {
+  try {
+    const url = runId
+      ? `${STRATEGY_BASE}/api/screener/results?run_id=${runId}`
+      : `${STRATEGY_BASE}/api/screener/results`;
+    const resp = await fetch(url);
+    const json = await resp.json();
+    if (json.code === 0 && json.data?.results) return json.data.results;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+// 获取单票详细诊断
+export async function getStockDetail(code: string): Promise<StockDetail | null> {
+  try {
+    const resp = await fetch(`${STRATEGY_BASE}/api/screener/stock/${code}`);
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// 触发数据同步（Go 服务）
+export async function syncMarketData(codes?: string[]): Promise<boolean> {
+  try {
+    const body: any = { concurrency: 8, lookback: 140 };
+    if (codes) body.codes = codes;
+    const resp = await fetch('/api/screener/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+// 查询同步状态
+export async function getSyncStatus(): Promise<{ status: string; total: number; done: number; failed: number } | null> {
+  try {
+    const resp = await fetch('/api/screener/sync-status');
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// 查询 DuckDB 统计
+export async function getDBStats(): Promise<{ total_rows: number; total_codes: number } | null> {
+  try {
+    const resp = await fetch('/api/screener/db-stats');
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ===== 交易监控相关 =====
+
+export interface TradingAnchors {
+  A: number;
+  H: number;
+  MA20: number;
+  low_prev40: number;
+  raise_line: number;
+  current_price: number;
+  current_date: string;
+}
+
+export interface TradingParams {
+  B: number;
+  L1: number;
+  L2: number;
+  T: number;
+  RR: number;
+  position_pct: number;
+  position_value: number;
+  shares: number;
+  risk_amount: number;
+  can_open: boolean;
+  reason: string;
+}
+
+export interface PricePosition {
+  zone: string;
+  current_price: number;
+  signals: string[];
+  action: string;
+}
+
+export interface StockDetail {
+  basic: {
+    code: string;
+    last_close: number;
+    last_date: string;
+    high_100: number;
+    low_100: number;
+    low_60: number;
+    low_prev40: number;
+    ma60: number;
+  };
+  pool_checks: {
+    structure_double_window: boolean;
+    new_high_confirm: boolean;
+    amplitude: boolean;
+    liquidity: boolean;
+    all_pass: boolean;
+  };
+  tier_indicators: {
+    low_raise_pct: number;
+    rebound_pct: number;
+    room_pct: number;
+    avg_amount_10: number;
+    rebound_pass: boolean;
+    room_pass: boolean;
+    volume_pass: boolean;
+  };
+  confirmations: {
+    support: { pass: boolean; support_line: number; description: string };
+    volume_breakout: { pass: boolean; breakout_date: string; volume_ratio: number; description: string };
+    ma_turn: { pass: boolean; ma60_slope: number; description: string };
+    all_pass: boolean;
+  };
+  invalidation: {
+    invalidated: boolean;
+    critical_line: number;
+    invalidate_price: number;
+    current_close: number;
+    description: string;
+  };
+  trading?: {
+    anchors: TradingAnchors;
+    buy_info: { B: number; mode: string; description: string };
+    params: TradingParams;
+    position: PricePosition;
+  };
+  klines: Array<{
+    date: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    amount: number;
+  }>;
+}
+
+export interface MonitorItem {
+  code: string;
+  name: string;
+  tier: string;
+  urgency: number;
+  current_price: number;
+  B: number;
+  L1: number;
+  L2: number;
+  T: number;
+  RR: number;
+  can_open: boolean;
+  zone: string;
+  action: string;
+  signals: string[];
+  shares: number;
+  position_pct: number;
+  low_60_date?: string;
+}
+
+// 执行实时监控
+export async function runMonitor(capital?: number, riskBudget?: number): Promise<MonitorItem[]> {
+  try {
+    const params = new URLSearchParams();
+    if (capital) params.set('capital', String(capital));
+    if (riskBudget) params.set('risk_budget', String(riskBudget));
+    const resp = await fetch(`/api/screener/monitor?${params.toString()}`, { method: 'POST' });
+    const json = await resp.json();
+    if (json.code === 0) return json.data.all || [];
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+// 获取监控结果
+export async function getMonitorResults(): Promise<{ time: string; count: number; alerts: MonitorItem[]; all: MonitorItem[] } | null> {
+  try {
+    const resp = await fetch('/api/screener/monitor');
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ========== 监控忽略名单 ==========
+
+export interface IgnoreItem {
+  code: string;
+  name: string;
+  added_at: string;
+  reason: string;
+}
+
+export async function listIgnore(): Promise<IgnoreItem[]> {
+  try {
+    const resp = await fetch('/api/screener/monitor/ignore');
+    const json = await resp.json();
+    if (json.code === 0) return json.data || [];
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addIgnore(code: string, name?: string, reason?: string): Promise<boolean> {
+  try {
+    const resp = await fetch('/api/screener/monitor/ignore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name: name || '', reason: reason || '' }),
+    });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function removeIgnore(code: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/screener/monitor/ignore/${code}`, { method: 'DELETE' });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+// ========== 待买列表 ==========
+
+export interface WatchBuyItem {
+  code: string;
+  name: string;
+  target_buy_price: number;
+  notes: string;
+  added_at: string;
+}
+
+export interface WatchBuyCheckItem {
+  code: string;
+  name: string;
+  current_price: number;
+  B: number;
+  L1: number;
+  L2: number;
+  T: number;
+  RR: number;
+  can_buy: boolean;
+  distance_pct: number;
+  signals: string[];
+}
+
+export async function listWatchBuy(): Promise<WatchBuyItem[]> {
+  try {
+    const resp = await fetch('/api/portfolio/watch-buy');
+    const json = await resp.json();
+    if (json.code === 0) return json.data || [];
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addWatchBuy(code: string, name?: string, targetBuyPrice?: number, notes?: string): Promise<boolean> {
+  try {
+    const resp = await fetch('/api/portfolio/watch-buy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name: name || '', target_buy_price: targetBuyPrice || 0, notes: notes || '' }),
+    });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function removeWatchBuy(code: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/portfolio/watch-buy/${code}`, { method: 'DELETE' });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function checkWatchBuy(): Promise<WatchBuyCheckItem[]> {
+  try {
+    const resp = await fetch('/api/portfolio/watch-buy/check', { method: 'POST' });
+    const json = await resp.json();
+    if (json.code === 0) return json.data || [];
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+// ========== 持仓列表 ==========
+
+export interface PositionItem {
+  code: string;
+  name: string;
+  buy_price: number;
+  shares: number;
+  buy_date: string;
+  notes: string;
+  added_at: string;
+}
+
+export interface PositionCheckItem {
+  code: string;
+  name: string;
+  buy_price: number;
+  shares: number;
+  current_price: number;
+  profit_pct: number;
+  market_value: number;
+  L1: number;
+  L2: number;
+  T: number;
+  signal_type: string;
+  signal_level: number;
+  has_signal: boolean;
+}
+
+export async function listPositions(): Promise<PositionItem[]> {
+  try {
+    const resp = await fetch('/api/portfolio/positions');
+    const json = await resp.json();
+    if (json.code === 0) return json.data || [];
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export async function addPosition(code: string, name: string, buyPrice: number, shares: number, buyDate?: string, notes?: string): Promise<boolean> {
+  try {
+    const resp = await fetch('/api/portfolio/positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name, buy_price: buyPrice, shares, buy_date: buyDate || '', notes: notes || '' }),
+    });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function removePosition(code: string): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/portfolio/positions/${code}`, { method: 'DELETE' });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function checkPositions(): Promise<PositionCheckItem[]> {
+  try {
+    const resp = await fetch('/api/portfolio/positions/check', { method: 'POST' });
+    const json = await resp.json();
+    if (json.code === 0) return json.data || [];
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+// ========== 告警 ==========
+
+export interface AlertItem {
+  id: number;
+  alert_type: string;
+  code: string;
+  name: string;
+  title: string;
+  message: string;
+  current_price: number;
+  trigger_price: number;
+  created_at: string;
+  is_read: number;
+}
+
+export async function getAlerts(unreadOnly?: boolean, limit?: number): Promise<{ alerts: AlertItem[]; unread_count: number }> {
+  try {
+    const params = new URLSearchParams();
+    if (unreadOnly) params.set('unread_only', 'true');
+    if (limit) params.set('limit', String(limit));
+    const resp = await fetch(`/api/portfolio/alerts?${params.toString()}`);
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return { alerts: [], unread_count: 0 };
+  } catch {
+    return { alerts: [], unread_count: 0 };
+  }
+}
+
+export async function markAlertRead(alertId: number): Promise<boolean> {
+  try {
+    const resp = await fetch(`/api/portfolio/alerts/${alertId}/read`, { method: 'POST' });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function markAllAlertsRead(): Promise<boolean> {
+  try {
+    const resp = await fetch('/api/portfolio/alerts/read-all', { method: 'POST' });
+    const json = await resp.json();
+    return json.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function runPortfolioCheck(): Promise<{ watch_buy: any[]; positions: any[]; total_alerts: number } | null> {
+  try {
+    const resp = await fetch('/api/portfolio/check', { method: 'POST' });
+    const json = await resp.json();
+    if (json.code === 0) return json.data;
+    return null;
+  } catch {
+    return null;
+  }
+}
