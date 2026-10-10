@@ -859,10 +859,13 @@ onUnmounted(() => {
 }
 .chart-view.light .btn-back,
 .chart-view.light .btn-star,
-.chart-view.light .btn-theme,
-.chart-view.light .btn-backtest {
+.chart-view.light .btn-theme {
   color: #333;
   border-color: #ddd;
+}
+.chart-view.light .btn-backtest {
+  background: #2962ff;
+  color: #fff;
 }
 .chart-view.light .btn-back:hover,
 .chart-view.light .btn-star:hover,
@@ -874,6 +877,10 @@ onUnmounted(() => {
 }
 .chart-view.light .tf-group button {
   color: #666;
+}
+.chart-view.light .tf-group button.active {
+  background: #2962ff;
+  color: #fff;
 }
 .chart-view.light .backtest-panel {
   background: #fafafa;
