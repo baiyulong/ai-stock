@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
-import { Vela } from '@luxalgo/vela';
+import { Vela, createDrawing } from '@luxalgo/vela';
 import { AShareProvider, StaticProvider } from '@/providers/ashare';
 import { theme, toggleTheme } from '@/stores/theme';
 import { isInWatchlist, addToWatchlist, removeFromWatchlist } from '@/stores/watchlist';
@@ -182,6 +182,8 @@ function enterBacktestMode() {
   chartRef.value.data.registerProvider('static', staticProvider.value);
   chartRef.value.setMarket({ symbol: `static:${props.code}`, timeframe: 'D' });
   currentTF.value = 'D';
+  // 延迟绘制买卖点标记，等图表加载完成
+  setTimeout(() => drawTradeMarkers(), 800);
 }
 
 // 退出回测模式
@@ -197,6 +199,53 @@ function exitBacktestMode() {
 function updatePlaybackChart() {
   // K线图显示全部回测数据，不需要更新
   // 面板信息通过 computed 属性自动更新
+}
+
+// 在K线图上绘制买卖点标记
+function drawTradeMarkers() {
+  if (!chartRef.value || !backtestResult.value) return;
+  const chart = chartRef.value as any;
+  // 清除旧标记（通过 text content 识别）
+  if (chart.drawings) {
+    const existing = chart.drawings.all();
+    existing.forEach((d: any) => {
+      if (d.text && (d.text.content === 'B' || d.text.content === 'S')) {
+        chart.drawings.remove(d.id);
+      }
+    });
+  }
+
+  const tzOffset = new Date().getTimezoneOffset() * 60 * 1000;
+  const trades = backtestResult.value.trades;
+
+  trades.forEach((trade) => {
+    const time = new Date(trade.date + 'T15:00:00+08:00').getTime() - tzOffset;
+    const isBuy = trade.type === 'buy';
+    const label = isBuy ? 'B' : 'S';
+    const color = isBuy ? '#ef5350' : '#26a69a';
+    const price = trade.price;
+
+    try {
+      const drawing = createDrawing('text', {
+        paneId: 'price',
+        anchors: [{ time, price }],
+        text: {
+          content: label,
+          color,
+          fontSize: 14,
+          bold: true,
+        },
+        style: {
+          color,
+        },
+      } as any);
+      if (drawing && chart.drawings) {
+        chart.drawings.add(drawing);
+      }
+    } catch (e) {
+      console.warn('Failed to draw trade marker:', e);
+    }
+  });
 }
 
 function closeBacktestPanel() {
