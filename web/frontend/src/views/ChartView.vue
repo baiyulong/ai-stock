@@ -86,6 +86,145 @@ const staticProvider = ref<StaticProvider | null>(null);
 const isBacktestMode = ref(false);
 let quoteTimer: ReturnType<typeof setInterval> | null = null;
 
+// 指标管理
+const showIndicatorMenu = ref(false);
+const indicatorHandles = ref<Map<string, any>>(new Map());
+
+// 可用指标列表
+const AVAILABLE_INDICATORS = [
+  { id: 'ma5', type: 'sma', name: 'MA5', inputs: { length: 5 }, pane: 'price' },
+  { id: 'ma10', type: 'sma', name: 'MA10', inputs: { length: 10 }, pane: 'price' },
+  { id: 'ma20', type: 'sma', name: 'MA20', inputs: { length: 20 }, pane: 'price' },
+  { id: 'ma60', type: 'sma', name: 'MA60', inputs: { length: 60 }, pane: 'price' },
+  { id: 'ema12', type: 'ema', name: 'EMA12', inputs: { length: 12 }, pane: 'price' },
+  { id: 'ema26', type: 'ema', name: 'EMA26', inputs: { length: 26 }, pane: 'price' },
+  { id: 'bollinger', type: 'bollinger-bands', name: '布林带', inputs: {}, pane: 'price' },
+  { id: 'macd', type: 'macd', name: 'MACD', inputs: {}, pane: 'new' },
+  { id: 'rsi', type: 'rsi', name: 'RSI', inputs: {}, pane: 'new' },
+  { id: 'kdj', type: 'stochastic', name: 'KDJ', inputs: {}, pane: 'new' },
+  { id: 'atr', type: 'average-true-range', name: 'ATR', inputs: {}, pane: 'new' },
+  { id: 'volume', type: 'volume', name: '成交量', inputs: {}, pane: 'new' },
+];
+
+// 已启用的指标（从localStorage恢复）
+const enabledIndicators = ref<Set<string>>(new Set());
+
+function loadIndicatorState() {
+  try {
+    const saved = localStorage.getItem('vela_indicators');
+    if (saved) {
+      const arr = JSON.parse(saved);
+      enabledIndicators.value = new Set(arr);
+    } else {
+      // 默认启用MA5/MA10/MA20和成交量
+      enabledIndicators.value = new Set(['ma5', 'ma10', 'ma20', 'volume']);
+    }
+  } catch {
+    enabledIndicators.value = new Set(['ma5', 'ma10', 'ma20', 'volume']);
+  }
+}
+
+function saveIndicatorState() {
+  localStorage.setItem('vela_indicators', JSON.stringify([...enabledIndicators.value]));
+}
+
+function toggleIndicator(id: string) {
+  if (enabledIndicators.value.has(id)) {
+    enabledIndicators.value.delete(id);
+    removeIndicator(id);
+  } else {
+    enabledIndicators.value.add(id);
+    addIndicator(id);
+  }
+  saveIndicatorState();
+}
+
+function addIndicator(id: string) {
+  if (!chartRef.value) return;
+  const ind = AVAILABLE_INDICATORS.find(i => i.id === id);
+  if (!ind) return;
+  try {
+    const chart = chartRef.value as any;
+    const handle = chart.addNativeIndicator(ind.type, { inputs: ind.inputs });
+    indicatorHandles.value.set(id, handle);
+    // 恢复保存的指标设置（颜色等）
+    restoreIndicatorSettings(id, handle);
+  } catch (e) {
+    console.warn(`Failed to add indicator ${id}:`, e);
+  }
+}
+
+// 指标设置持久化
+function getIndicatorSettingsKey() {
+  return 'vela_indicator_settings';
+}
+
+function loadAllIndicatorSettings(): Record<string, any> {
+  try {
+    const saved = localStorage.getItem(getIndicatorSettingsKey());
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveIndicatorSettings(indicatorId: string, values: Record<string, any>) {
+  const all = loadAllIndicatorSettings();
+  all[indicatorId] = { ...all[indicatorId], ...values };
+  localStorage.setItem(getIndicatorSettingsKey(), JSON.stringify(all));
+}
+
+function restoreIndicatorSettings(id: string, handle: any) {
+  const all = loadAllIndicatorSettings();
+  const saved = all[id];
+  if (saved && handle) {
+    try {
+      handle.setInputs(saved);
+    } catch (e) {
+      console.warn(`Failed to restore settings for ${id}:`, e);
+    }
+  }
+}
+
+function setupIndicatorSettingsListener() {
+  if (!chartRef.value) return;
+  const chart = chartRef.value as any;
+  if (chart.onInputChange) {
+    chart.onInputChange((e: any) => {
+      // e: { indicatorId, key, value, kind }
+      const indicatorId = e.indicatorId;
+      if (!indicatorId || !e.key) return;
+      // 找到对应的我们定义的指标id
+      for (const [id, handle] of indicatorHandles.value.entries()) {
+        if (handle.id === indicatorId) {
+          const all = loadAllIndicatorSettings();
+          if (!all[id]) all[id] = {};
+          all[id][e.key] = e.value;
+          localStorage.setItem(getIndicatorSettingsKey(), JSON.stringify(all));
+          break;
+        }
+      }
+    });
+  }
+}
+
+function removeIndicator(id: string) {
+  const handle = indicatorHandles.value.get(id);
+  if (handle) {
+    try {
+      handle.remove();
+    } catch (e) {
+      console.warn(`Failed to remove indicator ${id}:`, e);
+    }
+    indicatorHandles.value.delete(id);
+  }
+}
+
+function applyIndicators() {
+  indicatorHandles.value.clear();
+  enabledIndicators.value.forEach(id => addIndicator(id));
+}
+
 const TIMEFRAMES = [
   { key: '1', label: '1分' },
   { key: '5', label: '5分' },
@@ -149,7 +288,12 @@ function initChart() {
 
   const provider = new AShareProvider();
   chartRef.value.data.registerProvider('ashare', provider);
-  chartRef.value.addNativeIndicator('volume');
+  
+  // 应用用户选择的指标
+  nextTick(() => {
+    applyIndicators();
+    setupIndicatorSettingsListener();
+  });
 
   // 设置实时时钟为本地时间（Vela默认用UTC显示时间）
   nextTick(() => {
@@ -308,14 +452,21 @@ watch(theme, () => {
 });
 
 onMounted(() => {
+  loadIndicatorState();
   checkWatchlist();
   loadQuote();
   quoteTimer = setInterval(loadQuote, 5000);
   nextTick(() => initChart());
+  document.addEventListener('click', closeIndicatorMenu);
 });
+
+function closeIndicatorMenu() {
+  showIndicatorMenu.value = false;
+}
 
 onUnmounted(() => {
   if (quoteTimer) clearInterval(quoteTimer);
+  document.removeEventListener('click', closeIndicatorMenu);
   if (chartRef.value) {
     chartRef.value.destroy();
     chartRef.value = null;
@@ -341,6 +492,36 @@ onUnmounted(() => {
       <button class="btn-backtest" @click="openBacktestModal" title="历史回测">
         📊 回测
       </button>
+      <div class="indicator-wrap">
+        <button class="btn-indicator" @click.stop="showIndicatorMenu = !showIndicatorMenu" title="技术指标">
+          ƒ 指标
+        </button>
+        <div v-if="showIndicatorMenu" class="indicator-menu" @click.stop>
+          <div class="indicator-menu-title">技术指标</div>
+          <div class="indicator-group">
+            <div class="indicator-group-label">主图叠加</div>
+            <label
+              v-for="ind in AVAILABLE_INDICATORS.filter(i => i.pane === 'price')"
+              :key="ind.id"
+              class="indicator-item"
+            >
+              <input type="checkbox" :checked="enabledIndicators.has(ind.id)" @change="toggleIndicator(ind.id)" />
+              <span>{{ ind.name }}</span>
+            </label>
+          </div>
+          <div class="indicator-group">
+            <div class="indicator-group-label">副图指标</div>
+            <label
+              v-for="ind in AVAILABLE_INDICATORS.filter(i => i.pane === 'new')"
+              :key="ind.id"
+              class="indicator-item"
+            >
+              <input type="checkbox" :checked="enabledIndicators.has(ind.id)" @change="toggleIndicator(ind.id)" />
+              <span>{{ ind.name }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
       <button class="btn-star" :class="{ active: inWatchlist }" @click="toggleWatch">
         {{ inWatchlist ? '★' : '☆' }}
       </button>
@@ -502,6 +683,69 @@ onUnmounted(() => {
 }
 .btn-backtest:hover {
   background: #1e53e0;
+}
+.indicator-wrap {
+  position: relative;
+}
+.btn-indicator {
+  padding: 4px 12px;
+  background: #2a2e39;
+  border: 1px solid #3a3e49;
+  border-radius: 4px;
+  color: #d1d4dc;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.btn-indicator:hover {
+  background: #363a45;
+}
+.indicator-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: #1e222d;
+  border: 1px solid #2a2e39;
+  border-radius: 6px;
+  padding: 12px;
+  min-width: 180px;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.indicator-menu-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d1d4dc;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #2a2e39;
+}
+.indicator-group {
+  margin-bottom: 10px;
+}
+.indicator-group:last-child {
+  margin-bottom: 0;
+}
+.indicator-group-label {
+  font-size: 11px;
+  color: #787b86;
+  margin-bottom: 4px;
+}
+.indicator-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: #d1d4dc;
+}
+.indicator-item:hover {
+  color: #2962ff;
+}
+.indicator-item input[type="checkbox"] {
+  cursor: pointer;
 }
 .tf-group {
   display: flex;
@@ -882,6 +1126,32 @@ onUnmounted(() => {
 .chart-view.light .btn-backtest {
   background: #2962ff;
   color: #fff;
+}
+.chart-view.light .btn-indicator {
+  background: #f0f1f3;
+  border-color: #e0e3eb;
+  color: #131722;
+}
+.chart-view.light .btn-indicator:hover {
+  background: #e0e3eb;
+}
+.chart-view.light .indicator-menu {
+  background: #ffffff;
+  border-color: #e0e0e0;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.chart-view.light .indicator-menu-title {
+  color: #131722;
+  border-bottom-color: #e0e0e0;
+}
+.chart-view.light .indicator-group-label {
+  color: #888;
+}
+.chart-view.light .indicator-item {
+  color: #333;
+}
+.chart-view.light .indicator-item:hover {
+  color: #2962ff;
 }
 .chart-view.light .btn-back:hover,
 .chart-view.light .btn-star:hover,

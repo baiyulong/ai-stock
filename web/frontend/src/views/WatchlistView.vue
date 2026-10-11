@@ -11,12 +11,18 @@ const emit = defineEmits<{
 
 const quotes = ref<Map<string, QuoteData>>(new Map());
 const showAddBar = ref(false);
+const loading = ref(false);
 let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 async function refreshQuotes() {
   if (watchlist.value.length === 0) return;
-  const codes = watchlist.value.map((s) => s.code);
-  quotes.value = await fetchQuotes(codes);
+  loading.value = true;
+  try {
+    const codes = watchlist.value.map((s) => s.code);
+    quotes.value = await fetchQuotes(codes);
+  } finally {
+    loading.value = false;
+  }
 }
 
 function getQuote(code: string): QuoteData | undefined {
@@ -52,6 +58,9 @@ onUnmounted(() => {
     <div class="wl-header">
       <div class="wl-title">自选股</div>
       <div class="wl-actions">
+        <button class="btn-refresh" @click="refreshQuotes" :disabled="loading">
+          {{ loading ? '刷新中...' : '刷新' }}
+        </button>
         <button class="btn-theme" @click="toggleTheme">
           {{ theme === 'dark' ? '☀' : '☾' }}
         </button>
@@ -174,6 +183,30 @@ onUnmounted(() => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
+}
+.btn-refresh {
+  padding: 6px 14px;
+  background: #2a2e39;
+  color: #d1d4dc;
+  border: 1px solid #3a3e49;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.btn-refresh:hover {
+  background: #363a45;
+}
+.btn-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.light .btn-refresh {
+  background: #f0f1f3;
+  color: #131722;
+  border-color: #e0e3eb;
+}
+.light .btn-refresh:hover {
+  background: #e0e3eb;
 }
 .add-bar {
   display: flex;

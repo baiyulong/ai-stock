@@ -40,11 +40,16 @@ def add_rolling_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["avg_amount_100"] = g["amount"].transform(lambda x: x.rolling(100, min_periods=100).mean())
 
     # 均线
+    df["ma20"] = g["close"].transform(lambda x: x.rolling(20, min_periods=20).mean())
     df["ma60"] = g["close"].transform(lambda x: x.rolling(60, min_periods=60).mean())
     df["ma60_slope_5"] = g["ma60"].transform(lambda x: x.diff(5))
 
     # 成交量均线（用于放量突破判断）
     df["avg_volume_20"] = g["volume"].transform(lambda x: x.rolling(20, min_periods=20).mean())
+
+    # 量比：当日成交量 / 过去5日平均成交量（不含当日）
+    df["avg_volume_5"] = g["volume"].transform(lambda x: x.shift(1).rolling(5, min_periods=5).mean())
+    df["volume_ratio"] = df["volume"] / df["avg_volume_5"]
 
     return df
 

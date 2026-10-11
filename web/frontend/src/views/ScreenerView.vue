@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { theme, toggleTheme } from '@/stores/theme';
 import {
   runScreener,
@@ -25,11 +25,83 @@ const syncProgress = ref({ status: 'idle', total: 0, done: 0, failed: 0 });
 const dbStats = ref({ total_rows: 0, total_codes: 0 });
 const runInfo = ref({ run_id: '', run_at: '', total_scanned: 0, pool_count: 0 });
 
+// 筛选状态持久化到 localStorage
+const STORAGE_KEY = 'screener_filter_state';
+
+function loadFilterState() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch { /* ignore */ }
+  return null;
+}
+
+function saveFilterState() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      tierFilter: tierFilter.value,
+      sortKey: sortKey.value,
+      sortDesc: sortDesc.value,
+      filterMinRaise: filterMinRaise.value,
+      filterMaxRoom: filterMaxRoom.value,
+      filterMinRebound: filterMinRebound.value,
+      filterMinAmount: filterMinAmount.value,
+      filterMinFundScore: filterMinFundScore.value,
+      filterMinVolRatio: filterMinVolRatio.value,
+      filterMinRR: filterMinRR.value,
+      filterIndustry: filterIndustry.value,
+    }));
+  } catch { /* ignore */ }
+}
+
+const savedState = loadFilterState();
+
 // 筛选
-const tierFilter = ref<'all' | 'complete' | 'partial' | 'pool_only'>('all');
-type SortKey = 'low_raise_pct' | 'rebound_pct' | 'room_pct' | 'last_close' | 'high_100' | 'low_100' | 'avg_amount_10';
-const sortKey = ref<SortKey>('low_raise_pct');
-const sortDesc = ref(true);
+const tierFilter = ref<'all' | 'complete' | 'partial' | 'pool_only'>(savedState?.tierFilter || 'all');
+type SortKey = 'fund_score' | 'low_raise_pct' | 'rebound_pct' | 'room_pct' | 'last_close' | 'high_100' | 'low_100' | 'avg_amount_10' | 'volume_ratio' | 'rr_ratio';
+const sortKey = ref<SortKey>(savedState?.sortKey || 'low_raise_pct');
+const sortDesc = ref(savedState?.sortDesc !== false);
+
+// 高级筛选器
+const filterMinRaise = ref(savedState?.filterMinRaise ?? 0);      // 低点抬升下限 %
+const filterMaxRoom = ref(savedState?.filterMaxRoom ?? 30);      // 距高点空间上限 %
+const filterMinRebound = ref(savedState?.filterMinRebound ?? 0);    // 距低点回升下限 %
+const filterMinAmount = ref(savedState?.filterMinAmount ?? 0);     // 近10日日均额下限 亿
+const filterMinFundScore = ref(savedState?.filterMinFundScore ?? 0); // 基本面评分下限
+const filterMinVolRatio = ref(savedState?.filterMinVolRatio ?? 0);    // 量比下限
+const filterMinRR = ref(savedState?.filterMinRR ?? 0);              // 盈亏比下限
+const filterIndustry = ref<string[]>(savedState?.filterIndustry || []);  // 行业筛选（多选）
+const industryDropdownOpen = ref(false);  // 行业下拉面板状态
+
+// 监听筛选状态变化，自动保存到 localStorage
+watch(
+  [tierFilter, sortKey, sortDesc, filterMinRaise, filterMaxRoom, filterMinRebound, filterMinAmount, filterMinFundScore, filterMinVolRatio, filterMinRR, filterIndustry],
+  () => saveFilterState(),
+  { deep: true }
+);
+
+// 基本面评分详情弹窗
+const showFundDetailModal = ref(false);
+const fundDetailRow = ref<ScreenerResult | null>(null);
+
+// 行业列表（从结果中动态提取）
+const industryList = computed(() => {
+  const set = new Set<string>();
+  results.value.forEach(r => { if (r.industry) set.add(r.industry); });
+  return Array.from(set).sort();
+});
+
+// 重置筛选器
+function resetFilters() {
+  filterMinRaise.value = 0;
+  filterMaxRoom.value = 30;
+  filterMinRebound.value = 0;
+  filterMinAmount.value = 0;
+  filterMinFundScore.value = 0;
+  filterMinVolRatio.value = 0;
+  filterMinRR.value = 0;
+  filterIndustry.value = [];
+}
 
 // 点击表头排序
 function handleSort(key: SortKey) {
@@ -58,8 +130,41 @@ let syncTimer: ReturnType<typeof setInterval> | null = null;
 // 筛选后的结果
 const filteredResults = computed(() => {
   let list = results.value;
+  // 分层筛选
   if (tierFilter.value !== 'all') {
     list = list.filter((r) => r.tier === tierFilter.value);
+  }
+  // 低点抬升下限
+  if (filterMinRaise.value > 0) {
+    list = list.filter((r) => (r.low_raise_pct ?? 0) >= filterMinRaise.value);
+  }
+  // 距高点空间上限
+  if (filterMaxRoom.value < 30) {
+    list = list.filter((r) => (r.room_pct ?? 0) <= filterMaxRoom.value);
+  }
+  // 距低点回升下限
+  if (filterMinRebound.value > 0) {
+    list = list.filter((r) => (r.rebound_pct ?? 0) >= filterMinRebound.value);
+  }
+  // 日均额下限（亿）
+  if (filterMinAmount.value > 0) {
+    list = list.filter((r) => (r.avg_amount_10 ?? 0) >= filterMinAmount.value * 1e8);
+  }
+  // 基本面评分下限
+  if (filterMinFundScore.value > 0) {
+    list = list.filter((r) => (r.fund_score ?? 0) >= filterMinFundScore.value);
+  }
+  // 量比下限
+  if (filterMinVolRatio.value > 0) {
+    list = list.filter((r) => (r.volume_ratio ?? 0) >= filterMinVolRatio.value);
+  }
+  // 盈亏比下限
+  if (filterMinRR.value > 0) {
+    list = list.filter((r) => (r.rr_ratio ?? 0) >= filterMinRR.value);
+  }
+  // 行业筛选（多选）
+  if (filterIndustry.value.length > 0) {
+    list = list.filter((r) => filterIndustry.value.includes(r.industry || ''));
   }
   return [...list].sort((a, b) => {
     const av = a[sortKey.value] ?? 0;
@@ -109,6 +214,10 @@ async function handleSync() {
         syncing.value = false;
         if (syncTimer) clearInterval(syncTimer);
         await loadDBStats();
+        // 同步完成后自动触发行业信息预加载（后台执行）
+        try {
+          await fetch('/api/screener/preload-industry', { method: 'POST' });
+        } catch { /* ignore */ }
       }
     }
   }, 2000);
@@ -153,6 +262,37 @@ function tierClass(tier: string): string {
   }
 }
 
+function fundGradeClass(grade?: string): string {
+  switch (grade) {
+    case 'excellent': return 'fund-excellent';
+    case 'good': return 'fund-good';
+    case 'fair': return 'fund-fair';
+    default: return 'fund-poor';
+  }
+}
+
+// 显示基本面评分详情
+function showFundDetail(row: ScreenerResult) {
+  fundDetailRow.value = row;
+  showFundDetailModal.value = true;
+}
+
+// 评级文字
+function gradeText(grade?: string): string {
+  switch (grade) {
+    case 'excellent': return '优秀';
+    case 'good': return '良好';
+    case 'fair': return '一般';
+    default: return '较差';
+  }
+}
+
+// 增长率颜色
+function growthClass(v?: number): string {
+  if (v === undefined || v === null) return '';
+  return v >= 0 ? 'positive' : 'negative';
+}
+
 // 格式化百分比
 function fmtPct(v: number | undefined): string {
   if (v === undefined || v === null) return '--';
@@ -167,15 +307,32 @@ function fmtPrice(v: number | undefined): string {
 
 onMounted(() => {
   loadDBStats();
-  // 页面加载时自动获取最近一次选股结果
-  getScreenerResults().then((r) => {
-    if (r.length > 0) results.value = r;
-  });
+  loadResults();
+  // 点击外部关闭行业下拉面板
+  document.addEventListener('click', handleClickOutside);
 });
+
+async function loadResults() {
+  loading.value = true;
+  try {
+    const r = await getScreenerResults();
+    if (r.length > 0) results.value = r;
+  } finally {
+    loading.value = false;
+  }
+}
 
 onUnmounted(() => {
   if (syncTimer) clearInterval(syncTimer);
+  document.removeEventListener('click', handleClickOutside);
 });
+
+function handleClickOutside(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  if (!target.closest('.sc-industry-dropdown')) {
+    industryDropdownOpen.value = false;
+  }
+}
 </script>
 
 <template>
@@ -189,6 +346,9 @@ onUnmounted(() => {
         </span>
         <button class="btn-sync" :disabled="syncing" @click="handleSync">
           {{ syncing ? `同步中 ${syncProgress.done}/${syncProgress.total}` : '同步数据' }}
+        </button>
+        <button class="btn-sync" :disabled="loading" @click="loadResults">
+          {{ loading ? '加载中...' : '刷新' }}
         </button>
         <button class="btn-run" :disabled="loading" @click="handleRunScreener">
           {{ loading ? '选股中...' : '执行选股' }}
@@ -220,7 +380,61 @@ onUnmounted(() => {
           <span class="sc-filter-count">{{ t === 'all' ? results.length : tierCounts[t] }}</span>
         </button>
       </div>
-      <div class="sc-filter-hint">点击表头列名可排序</div>
+      <div class="sc-filter-hint">点击表头列名可排序 | 筛选后 {{ filteredResults.length }} 只</div>
+    </div>
+
+    <!-- 高级筛选器 -->
+    <div class="sc-advanced-filters">
+      <div class="sc-filter-item">
+        <label>低点抬升 ≥ <span class="filter-val">{{ filterMinRaise }}%</span></label>
+        <input type="range" min="0" max="20" step="1" v-model.number="filterMinRaise" />
+      </div>
+      <div class="sc-filter-item">
+        <label>距高点空间 ≤ <span class="filter-val">{{ filterMaxRoom }}%</span></label>
+        <input type="range" min="0" max="30" step="1" v-model.number="filterMaxRoom" />
+      </div>
+      <div class="sc-filter-item">
+        <label>距低点回升 ≥ <span class="filter-val">{{ filterMinRebound }}%</span></label>
+        <input type="range" min="0" max="50" step="1" v-model.number="filterMinRebound" />
+      </div>
+      <div class="sc-filter-item">
+        <label>日均额 ≥ <span class="filter-val">{{ filterMinAmount }}亿</span></label>
+        <input type="range" min="0" max="10" step="0.5" v-model.number="filterMinAmount" />
+      </div>
+      <div class="sc-filter-item">
+        <label>基本面 ≥ <span class="filter-val">{{ filterMinFundScore }}分</span></label>
+        <input type="range" min="0" max="100" step="5" v-model.number="filterMinFundScore" />
+      </div>
+      <div class="sc-filter-item">
+        <label>量比 ≥ <span class="filter-val">{{ filterMinVolRatio }}</span></label>
+        <input type="range" min="0" max="5" step="0.1" v-model.number="filterMinVolRatio" />
+      </div>
+      <div class="sc-filter-item">
+        <label>盈亏比 ≥ <span class="filter-val">{{ filterMinRR }}</span></label>
+        <input type="range" min="0" max="5" step="0.1" v-model.number="filterMinRR" />
+      </div>
+      <div class="sc-filter-item sc-filter-industry">
+        <label>行业（多选）</label>
+        <div class="sc-industry-dropdown">
+          <button class="sc-industry-toggle" @click.stop="industryDropdownOpen = !industryDropdownOpen">
+            {{ filterIndustry.length === 0 ? '全部行业' : `已选${filterIndustry.length}个` }}
+            <span class="sc-industry-arrow">{{ industryDropdownOpen ? '▲' : '▼' }}</span>
+          </button>
+          <div v-if="industryDropdownOpen" class="sc-industry-panel" @click.stop>
+            <div class="sc-industry-actions">
+              <button class="sc-industry-action-btn" @click="filterIndustry = [...industryList]">全选</button>
+              <button class="sc-industry-action-btn" @click="filterIndustry = []">清空</button>
+            </div>
+            <div class="sc-industry-list">
+              <label v-for="ind in industryList" :key="ind" class="sc-industry-option">
+                <input type="checkbox" :value="ind" v-model="filterIndustry" />
+                <span>{{ ind }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <button class="sc-filter-reset" @click="resetFilters">重置</button>
     </div>
 
     <!-- 结果表格 -->
@@ -231,6 +445,7 @@ onUnmounted(() => {
             <th class="col-name">名称/代码</th>
             <th class="col-num">分层</th>
             <th class="col-num">行业</th>
+            <th class="col-num sortable" @click="handleSort('fund_score')">基本面{{ sortArrow('fund_score') }}</th>
             <th class="col-num sortable" @click="handleSort('low_raise_pct')">低点抬升{{ sortArrow('low_raise_pct') }}</th>
             <th class="col-num sortable" @click="handleSort('rebound_pct')">距低点回升{{ sortArrow('rebound_pct') }}</th>
             <th class="col-num sortable" @click="handleSort('room_pct')">距高点空间{{ sortArrow('room_pct') }}</th>
@@ -238,6 +453,8 @@ onUnmounted(() => {
             <th class="col-num sortable" @click="handleSort('high_100')">百日高点{{ sortArrow('high_100') }}</th>
             <th class="col-num sortable" @click="handleSort('low_100')">百日低点{{ sortArrow('low_100') }}</th>
             <th class="col-num sortable" @click="handleSort('avg_amount_10')">近10日日均额{{ sortArrow('avg_amount_10') }}</th>
+            <th class="col-num sortable" @click="handleSort('volume_ratio')">量比{{ sortArrow('volume_ratio') }}</th>
+            <th class="col-num sortable" @click="handleSort('rr_ratio')">盈亏比{{ sortArrow('rr_ratio') }}</th>
             <th class="col-num">操作</th>
           </tr>
         </thead>
@@ -255,6 +472,16 @@ onUnmounted(() => {
               <span :class="['tier-badge', tierClass(row.tier)]">{{ tierLabel(row.tier) }}</span>
             </td>
             <td class="col-num industry">{{ row.industry || '--' }}</td>
+            <td class="col-num">
+              <span
+                v-if="row.fund_score != null"
+                :class="['fund-badge', fundGradeClass(row.fund_grade), 'clickable']"
+                @click.stop="showFundDetail(row)"
+              >
+                {{ row.fund_score }}
+              </span>
+              <span v-else class="fund-na">--</span>
+            </td>
             <td class="col-num positive">{{ fmtPct(row.low_raise_pct) }}</td>
             <td class="col-num" :class="{ positive: row.rebound_pct >= 15 }">{{ fmtPct(row.rebound_pct) }}</td>
             <td class="col-num" :class="{ negative: row.room_pct <= 15 }">{{ fmtPct(row.room_pct) }}</td>
@@ -262,12 +489,18 @@ onUnmounted(() => {
             <td class="col-num">{{ fmtPrice(row.high_100) }}</td>
             <td class="col-num">{{ fmtPrice(row.low_100) }}</td>
             <td class="col-num">{{ formatAmount(row.avg_amount_10) }}</td>
+            <td class="col-num" :class="{ positive: (row.volume_ratio ?? 0) >= 1.5, negative: (row.volume_ratio ?? 0) < 0.8 }">
+              {{ row.volume_ratio != null ? row.volume_ratio.toFixed(2) : '--' }}
+            </td>
+            <td class="col-num" :class="{ positive: (row.rr_ratio ?? 0) >= 2, negative: (row.rr_ratio ?? 0) < 1.5 }">
+              {{ row.rr_ratio != null ? row.rr_ratio.toFixed(2) : '--' }}
+            </td>
             <td class="col-num">
               <button class="btn-chart" @click.stop="handleDetail(row.code, row.name)">详情</button>
             </td>
           </tr>
           <tr v-if="filteredResults.length === 0">
-            <td colspan="11" class="sc-empty">
+            <td colspan="12" class="sc-empty">
               {{ loading ? '正在选股...' : '暂无结果，点击"执行选股"开始' }}
             </td>
           </tr>
@@ -439,6 +672,117 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+
+  <!-- 基本面评分详情弹窗 -->
+  <div v-if="showFundDetailModal" class="fund-modal-overlay" @click.self="showFundDetailModal = false">
+    <div class="fund-modal">
+      <div class="fund-modal-header">
+        <span class="fund-modal-title">
+          {{ fundDetailRow?.name }}（{{ fundDetailRow?.code }}）基本面评分详情
+        </span>
+        <span class="fund-modal-close" @click="showFundDetailModal = false">×</span>
+      </div>
+      <div class="fund-modal-body" v-if="fundDetailRow">
+        <!-- 总分 -->
+        <div class="fund-total">
+          <div class="fund-total-score" :class="fundGradeClass(fundDetailRow.fund_grade)">
+            {{ fundDetailRow.fund_score ?? '--' }}
+          </div>
+          <div class="fund-total-label">
+            综合评分（满分100）
+            <div class="fund-grade-text" :class="fundGradeClass(fundDetailRow.fund_grade)">
+              {{ gradeText(fundDetailRow.fund_grade) }}
+            </div>
+          </div>
+        </div>
+
+        <!-- 五维度得分 -->
+        <div class="fund-dimensions">
+          <div class="fund-dim-item">
+            <div class="fund-dim-name">ROE质量</div>
+            <div class="fund-dim-bar">
+              <div class="fund-dim-fill" :style="{width: (fundDetailRow.fund_details?.roe_score ?? 0) + '%'}"></div>
+            </div>
+            <div class="fund-dim-score">{{ fundDetailRow.fund_details?.roe_score ?? '--' }}/25</div>
+          </div>
+          <div class="fund-dim-item">
+            <div class="fund-dim-name">成长性</div>
+            <div class="fund-dim-bar">
+              <div class="fund-dim-fill" :style="{width: ((fundDetailRow.fund_details?.growth_score ?? 0) / 25 * 100) + '%'}"></div>
+            </div>
+            <div class="fund-dim-score">{{ fundDetailRow.fund_details?.growth_score ?? '--' }}/25</div>
+          </div>
+          <div class="fund-dim-item">
+            <div class="fund-dim-name">盈利稳定性</div>
+            <div class="fund-dim-bar">
+              <div class="fund-dim-fill" :style="{width: ((fundDetailRow.fund_details?.stability_score ?? 0) / 20 * 100) + '%'}"></div>
+            </div>
+            <div class="fund-dim-score">{{ fundDetailRow.fund_details?.stability_score ?? '--' }}/20</div>
+          </div>
+          <div class="fund-dim-item">
+            <div class="fund-dim-name">财务安全</div>
+            <div class="fund-dim-bar">
+              <div class="fund-dim-fill" :style="{width: ((fundDetailRow.fund_details?.debt_score ?? 0) / 15 * 100) + '%'}"></div>
+            </div>
+            <div class="fund-dim-score">{{ fundDetailRow.fund_details?.debt_score ?? '--' }}/15</div>
+          </div>
+          <div class="fund-dim-item">
+            <div class="fund-dim-name">盈利质量</div>
+            <div class="fund-dim-bar">
+              <div class="fund-dim-fill" :style="{width: ((fundDetailRow.fund_details?.quality_score ?? 0) / 15 * 100) + '%'}"></div>
+            </div>
+            <div class="fund-dim-score">{{ fundDetailRow.fund_details?.quality_score ?? '--' }}/15</div>
+          </div>
+        </div>
+
+        <!-- 具体指标 -->
+        <div class="fund-metrics">
+          <div class="fund-metric-title">关键财务指标</div>
+          <div class="fund-metric-grid">
+            <div class="fund-metric-item">
+              <span class="fund-metric-label">加权ROE</span>
+              <span class="fund-metric-value">{{ fmtPct(fundDetailRow.fund_details?.roe) }}</span>
+            </div>
+            <div class="fund-metric-item">
+              <span class="fund-metric-label">营收同比</span>
+              <span class="fund-metric-value" :class="growthClass(fundDetailRow.fund_details?.rev_growth)">{{ fmtPct(fundDetailRow.fund_details?.rev_growth) }}</span>
+            </div>
+            <div class="fund-metric-item">
+              <span class="fund-metric-label">净利润同比</span>
+              <span class="fund-metric-value" :class="growthClass(fundDetailRow.fund_details?.profit_growth)">{{ fmtPct(fundDetailRow.fund_details?.profit_growth) }}</span>
+            </div>
+            <div class="fund-metric-item">
+              <span class="fund-metric-label">资产负债率</span>
+              <span class="fund-metric-value">{{ fmtPct(fundDetailRow.fund_details?.debt_ratio) }}</span>
+            </div>
+            <div class="fund-metric-item">
+              <span class="fund-metric-label">销售毛利率</span>
+              <span class="fund-metric-value">{{ fmtPct(fundDetailRow.fund_details?.gross_margin) }}</span>
+            </div>
+            <div class="fund-metric-item">
+              <span class="fund-metric-label">总资产净利率</span>
+              <span class="fund-metric-value">{{ fmtPct(fundDetailRow.fund_details?.roa) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ROE趋势 -->
+        <div class="fund-roe-trend" v-if="fundDetailRow.fund_details?.roe_trend?.length">
+          <div class="fund-metric-title">近4期ROE趋势</div>
+          <div class="fund-roe-bars">
+            <div
+              v-for="(v, i) in fundDetailRow.fund_details.roe_trend"
+              :key="i"
+              class="fund-roe-bar-item"
+            >
+              <div class="fund-roe-bar" :style="{height: Math.max(Math.abs(v) * 2, 4) + 'px', background: v >= 0 ? '#ef5350' : '#26a69a'}"></div>
+              <div class="fund-roe-val">{{ v?.toFixed(1) }}%</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -556,6 +900,143 @@ onUnmounted(() => {
   background: rgba(255,255,255,0.25);
 }
 
+/* 高级筛选器 */
+.sc-advanced-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-color, #2a2e39);
+  background: var(--bg-secondary, #1e222d);
+}
+.sc-filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+.sc-filter-item label {
+  font-size: 11px;
+  color: var(--text-secondary, #787b86);
+  white-space: nowrap;
+}
+.filter-val {
+  color: #2962ff;
+  font-weight: 600;
+}
+.sc-filter-item input[type="range"] {
+  width: 120px;
+  height: 4px;
+  cursor: pointer;
+  accent-color: #2962ff;
+}
+.sc-filter-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, #2a2e39);
+  border-radius: 3px;
+  background: var(--bg-primary, #131722);
+  color: var(--text-primary, #d1d4dc);
+  font-size: 12px;
+  min-width: 120px;
+}
+.sc-filter-industry {
+  min-width: 140px;
+  position: relative;
+}
+.sc-industry-dropdown {
+  position: relative;
+}
+.sc-industry-toggle {
+  width: 100%;
+  padding: 5px 10px;
+  border: 1px solid var(--border-color, #2a2e39);
+  border-radius: 3px;
+  background: var(--bg-primary, #131722);
+  color: var(--text-primary, #d1d4dc);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.sc-industry-toggle:hover {
+  border-color: #2962ff;
+}
+.sc-industry-arrow {
+  font-size: 10px;
+  color: var(--text-secondary, #787b86);
+  margin-left: 6px;
+}
+.sc-industry-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg-primary, #1e222d);
+  border: 1px solid var(--border-color, #2a2e39);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  z-index: 100;
+  min-width: 180px;
+  max-width: 280px;
+}
+.sc-industry-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color, #2a2e39);
+}
+.sc-industry-action-btn {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, #2a2e39);
+  border-radius: 3px;
+  background: var(--bg-secondary, #2a2e39);
+  color: var(--text-primary, #d1d4dc);
+  font-size: 11px;
+  cursor: pointer;
+}
+.sc-industry-action-btn:hover {
+  background: #2962ff;
+  border-color: #2962ff;
+  color: #fff;
+}
+.sc-industry-list {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.sc-industry-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary, #d1d4dc);
+}
+.sc-industry-option:hover {
+  background: var(--bg-secondary, #2a2e39);
+}
+.sc-industry-option input[type="checkbox"] {
+  cursor: pointer;
+}
+.sc-filter-reset {
+  padding: 6px 14px;
+  border: 1px solid var(--border-color, #2a2e39);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-secondary, #787b86);
+  cursor: pointer;
+  font-size: 12px;
+  margin-left: auto;
+}
+.sc-filter-reset:hover {
+  color: #ef5350;
+  border-color: #ef5350;
+}
+
 .sc-select {
   padding: 4px 8px;
   border: 1px solid var(--border-color, #2a2e39);
@@ -655,6 +1136,22 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* 基本面评分 */
+.fund-badge {
+  display: inline-block;
+  min-width: 32px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+.fund-excellent { background: #26a69a; color: #fff; }
+.fund-good { background: #66bb6a; color: #fff; }
+.fund-fair { background: #f2994a; color: #fff; }
+.fund-poor { background: #ef5350; color: #fff; }
+.fund-na { color: var(--text-secondary, #787b86); font-size: 12px; }
 
 .positive { color: #ef5350; }
 .negative { color: #26a69a; }
@@ -864,4 +1361,177 @@ onUnmounted(() => {
   --btn-bg: #f0f1f3;
   --row-hover: #f5f6f8;
 }
+
+/* 基本面评分详情弹窗 */
+.fund-modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.fund-modal {
+  background: var(--bg-primary, #1e222d);
+  border: 1px solid var(--border-color, #2a2e39);
+  border-radius: 8px;
+  width: 520px;
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.fund-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color, #2a2e39);
+}
+.fund-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary, #d1d4dc);
+}
+.fund-modal-close {
+  cursor: pointer;
+  font-size: 22px;
+  color: var(--text-secondary, #787b86);
+  line-height: 1;
+}
+.fund-modal-close:hover { color: var(--text-primary, #d1d4dc); }
+.fund-modal-body { padding: 18px; }
+
+/* 总分 */
+.fund-total {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-color, #2a2e39);
+}
+.fund-total-score {
+  font-size: 42px;
+  font-weight: 700;
+  min-width: 70px;
+  text-align: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+}
+.fund-total-label {
+  font-size: 13px;
+  color: var(--text-secondary, #787b86);
+}
+.fund-grade-text {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+/* 五维度 */
+.fund-dimensions { margin-bottom: 20px; }
+.fund-dim-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.fund-dim-name {
+  width: 70px;
+  font-size: 12px;
+  color: var(--text-secondary, #787b86);
+  flex-shrink: 0;
+}
+.fund-dim-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg-secondary, #2a2e39);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fund-dim-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #26a69a, #66bb6a);
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+.fund-dim-score {
+  width: 50px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-primary, #d1d4dc);
+  font-weight: 600;
+}
+
+/* 关键指标 */
+.fund-metrics { margin-bottom: 16px; }
+.fund-metric-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #d1d4dc);
+  margin-bottom: 10px;
+}
+.fund-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.fund-metric-item {
+  background: var(--bg-secondary, #2a2e39);
+  padding: 8px 10px;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fund-metric-label {
+  font-size: 11px;
+  color: var(--text-secondary, #787b86);
+}
+.fund-metric-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #d1d4dc);
+}
+
+/* ROE趋势 */
+.fund-roe-trend { margin-top: 16px; }
+.fund-roe-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  height: 80px;
+  padding: 10px 0;
+}
+.fund-roe-bar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+.fund-roe-bar {
+  width: 28px;
+  border-radius: 3px 3px 0 0;
+  min-height: 4px;
+}
+.fund-roe-val {
+  font-size: 11px;
+  color: var(--text-secondary, #787b86);
+}
+
+/* 评分徽章可点击 */
+.fund-badge.clickable {
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.fund-badge.clickable:hover {
+  transform: scale(1.1);
+}
+
+/* 浅色主题弹窗适配 */
+.light .fund-modal { background: #ffffff; }
+.light .fund-dim-bar { background: #e0e3eb; }
+.light .fund-metric-item { background: #f5f6f8; }
 </style>

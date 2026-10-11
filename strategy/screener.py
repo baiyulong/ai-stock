@@ -11,7 +11,8 @@ from config import (
 )
 from db import load_day_klines, load_stock_info, save_screen_result
 from indicators import add_rolling_indicators, get_latest_per_stock, calc_tier_indicators, get_second_low_dates
-from industry import get_industries
+from industry import get_industries, load_industries_from_db
+from fundamentals import get_fundamentals_batch, load_fundamentals_from_db, save_fundamentals_to_db
 
 
 def run_screener() -> dict:
@@ -76,6 +77,16 @@ def run_screener() -> dict:
     pool["last_close"] = pool["close"]
     pool["invalidated"] = False
 
+    # 6.5 计算盈亏比 RR = (T - B) / (B - L1)
+    # T = 百日高点 × 1.03，B = max(MA20, 前40日低点)，L1 = B × 0.92
+    pool["B_price"] = pool[["ma20", "low_prev40"]].max(axis=1)
+    pool["T_price"] = pool["high_100"] * 1.03
+    pool["L1_price"] = pool["B_price"] * 0.92
+    risk = pool["B_price"] - pool["L1_price"]
+    reward = pool["T_price"] - pool["B_price"]
+    pool["rr_ratio"] = (reward / risk).where(risk > 0, 0)
+    pool["rr_ratio"] = pool["rr_ratio"].round(2)
+
     # 7. 排序: complete 优先 → 低点抬升降序 → 距高点空间升序
     tier_order = {"complete": 0, "partial": 1, "pool_only": 2}
     pool["tier_order"] = pool["tier"].map(tier_order)
@@ -88,7 +99,7 @@ def run_screener() -> dict:
         "low_60", "low_prev40", "low_raise_pct", "low_60_date",
         "high_100", "low_100", "last_close",
         "rebound_pct", "room_pct",
-        "avg_amount_10", "avg_amount_100",
+        "avg_amount_10", "avg_amount_100", "volume_ratio", "rr_ratio",
         "tier", "invalidated",
     ]
     # 补充详情列（留空，后续单票分析时填充）
@@ -103,9 +114,53 @@ def run_screener() -> dict:
     # 9. 统计
     tier_counts = pool["tier"].value_counts().to_dict()
 
-    # 10. 获取行业信息
+    # 10. 获取行业信息（只从数据库读取，不调用外部API避免阻塞）
     codes = pool["code"].tolist()
-    industries = get_industries(codes) if codes else {}
+    industries = {}
+    if codes:
+        try:
+            all_industries = load_industries_from_db()
+            industries = {c: all_industries[c] for c in codes if c in all_industries}
+        except Exception as e:
+            print(f"加载行业信息失败: {e}")
+
+    # 11. 获取基本面评分（优先从数据库，缺失的后台异步获取，避免阻塞选股）
+    fundamentals = {}
+    if codes:
+        try:
+            # 先从数据库加载所有已缓存的
+            all_fundamentals = load_fundamentals_from_db()
+            fundamentals = {c: all_fundamentals[c] for c in codes if c in all_fundamentals}
+            # 缺失的后台异步获取
+            missing = [c for c in codes if c not in fundamentals]
+            if missing:
+                print(f"后台异步获取 {len(missing)} 只股票的基本面评分...")
+                import threading
+                def fetch_fund_background():
+                    try:
+                        from fundamentals import get_fundamental
+                        new_data = {}
+                        for i, code in enumerate(missing):
+                            try:
+                                fund = get_fundamental(code, use_cache=False)
+                                if fund:
+                                    new_data[code] = fund
+                            except Exception as e:
+                                print(f"获取 {code} 基本面失败: {e}")
+                            time.sleep(0.05)
+                            if (i + 1) % 50 == 0:
+                                print(f"  基本面获取进度 {i+1}/{len(missing)}")
+                        if new_data:
+                            try:
+                                save_fundamentals_to_db(new_data)
+                                print(f"基本面数据保存完成，共 {len(new_data)} 只")
+                            except Exception as e:
+                                print(f"保存基本面数据失败: {e}")
+                    except Exception as e:
+                        print(f"后台获取基本面异常: {e}")
+                threading.Thread(target=fetch_fund_background, daemon=True).start()
+        except Exception as e:
+            print(f"加载基本面评分失败: {e}")
 
     return {
         "run_id": run_id,
@@ -113,14 +168,16 @@ def run_screener() -> dict:
         "total_scanned": int(len(latest)),
         "pool_count": int(len(pool)),
         "tier_counts": tier_counts,
-        "results": format_results(pool, industries),
+        "results": format_results(pool, industries, fundamentals),
     }
 
 
-def format_results(df: pd.DataFrame, industries: dict = None) -> list:
+def format_results(df: pd.DataFrame, industries: dict = None, fundamentals: dict = None) -> list:
     """格式化结果为 JSON 友好的列表"""
     if industries is None:
         industries = {}
+    if fundamentals is None:
+        fundamentals = {}
     cols = [
         "code", "name", "tier",
         "low_raise_pct", "rebound_pct", "room_pct",
@@ -139,5 +196,13 @@ def format_results(df: pd.DataFrame, industries: dict = None) -> list:
                 v = None
             item[c] = v
         item["industry"] = industries.get(row.get("code"), "")
+        # 基本面评分
+        fund = fundamentals.get(row.get("code"), {})
+        item["fund_score"] = fund.get("score")
+        item["fund_grade"] = fund.get("grade")
+        item["roe"] = fund.get("details", {}).get("roe")
+        item["rev_growth"] = fund.get("details", {}).get("rev_growth")
+        item["profit_growth"] = fund.get("details", {}).get("profit_growth")
+        item["debt_ratio"] = fund.get("details", {}).get("debt_ratio")
         result.append(item)
     return result

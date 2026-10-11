@@ -36,10 +36,21 @@ def init_db():
                 low_100 REAL,
                 avg_amount_10 REAL,
                 avg_amount_100 REAL,
+                volume_ratio REAL,
+                rr_ratio REAL,
                 invalidated INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 旧表升级：增加新字段
+        try:
+            conn.execute("ALTER TABLE screen_result ADD COLUMN volume_ratio REAL")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE screen_result ADD COLUMN rr_ratio REAL")
+        except Exception:
+            pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_run_id ON screen_result(run_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_code ON screen_result(code)")
         conn.execute("""
@@ -161,14 +172,17 @@ def save_run_results(run_id: str, run_at: str, df: pd.DataFrame):
                 r.get("low_100"),
                 r.get("avg_amount_10"),
                 r.get("avg_amount_100"),
+                r.get("volume_ratio"),
+                r.get("rr_ratio"),
                 0,
             ))
 
         conn.executemany("""
             INSERT INTO screen_result
             (run_id, run_at, code, name, tier, low_raise_pct, rebound_pct, room_pct,
-             last_close, low_60, low_prev40, high_100, low_100, avg_amount_10, avg_amount_100, invalidated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             last_close, low_60, low_prev40, high_100, low_100, avg_amount_10, avg_amount_100,
+             volume_ratio, rr_ratio, invalidated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, rows)
         conn.commit()
     finally:

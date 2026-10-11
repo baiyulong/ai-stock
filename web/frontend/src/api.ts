@@ -184,6 +184,26 @@ export interface ScreenerResult {
   name: string;
   tier: 'complete' | 'partial' | 'pool_only';
   industry?: string;
+  fund_score?: number;
+  fund_grade?: 'excellent' | 'good' | 'fair' | 'poor';
+  fund_details?: {
+    roe?: number;
+    roe_score?: number;
+    rev_growth?: number;
+    profit_growth?: number;
+    growth_score?: number;
+    roe_trend?: number[];
+    stability_score?: number;
+    debt_ratio?: number;
+    debt_score?: number;
+    gross_margin?: number;
+    roa?: number;
+    quality_score?: number;
+  };
+  roe?: number;
+  rev_growth?: number;
+  profit_growth?: number;
+  debt_ratio?: number;
   low_raise_pct: number;
   rebound_pct: number;
   room_pct: number;
@@ -195,6 +215,8 @@ export interface ScreenerResult {
   low_100: number;
   avg_amount_10: number;
   avg_amount_100: number;
+  volume_ratio?: number;
+  rr_ratio?: number;
 }
 
 export interface ScreenerRunResult {

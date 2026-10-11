@@ -93,10 +93,6 @@ onUnmounted(() => {
         @click="switchView('monitor')"
       >监控</button>
       <button
-        :class="['nav-btn', { active: currentView === 'ignore' }]"
-        @click="switchView('ignore')"
-      >忽略</button>
-      <button
         :class="['nav-btn', { active: currentView === 'watchbuy' }]"
         @click="switchView('watchbuy')"
       >
@@ -107,6 +103,10 @@ onUnmounted(() => {
         :class="['nav-btn', { active: currentView === 'position' }]"
         @click="switchView('position')"
       >持仓</button>
+      <button
+        :class="['nav-btn', { active: currentView === 'ignore' }]"
+        @click="switchView('ignore')"
+      >忽略</button>
 
       <!-- 告警铃铛 -->
       <div class="alert-wrapper">

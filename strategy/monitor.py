@@ -11,6 +11,7 @@ from typing import List, Dict
 from db import get_screen_result, load_day_klines
 from trading import calc_anchors, calc_buy_price, calc_trading_params, calc_price_position, _to_native
 from persistence import get_monitor_ignore_codes
+from fundamentals import load_fundamentals_from_db
 
 
 # 内存中保存最新监控结果
@@ -36,6 +37,19 @@ def run_monitor(capital: float = 100000, risk_budget: float = 0.01) -> List[Dict
     # 过滤掉监控忽略名单中的股票
     ignore_codes = get_monitor_ignore_codes()
     df = df[~df["code"].astype(str).str.zfill(6).isin(ignore_codes)]
+    if df.empty:
+        _monitor_results = []
+        return []
+
+    # 只监控基本面评分 >= 60 的股票
+    try:
+        fundamentals = load_fundamentals_from_db()
+        qualified_codes = {c for c, f in fundamentals.items() if (f.get("score") or 0) >= 60}
+        df = df[df["code"].astype(str).str.zfill(6).isin(qualified_codes)]
+        print(f"监控过滤：基本面>=60分，剩余 {len(df)} 只")
+    except Exception as e:
+        print(f"加载基本面评分失败: {e}")
+
     if df.empty:
         _monitor_results = []
         return []

@@ -18,6 +18,8 @@ from portfolio import (
     run_portfolio_check, check_watch_buy, check_positions,
     get_alerts as get_portfolio_alerts, get_unread_count, read_alert, read_all_alerts
 )
+from industry import get_industries
+from fundamentals import get_fundamentals_batch
 import persistence
 
 app = FastAPI(title="TDX 选股策略服务", version="1.1.0")
@@ -72,6 +74,24 @@ async def run_strategy():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/screener/preload-industry")
+async def preload_industry():
+    """预加载所有股票的行业信息到数据库（耗时较长，后台执行）"""
+    try:
+        # 在后台线程中执行，避免阻塞
+        import threading
+        def run():
+            try:
+                from industry import preload_all_industries
+                preload_all_industries()
+            except Exception as e:
+                print(f"预加载行业信息失败: {e}")
+        threading.Thread(target=run, daemon=True).start()
+        return {"code": 0, "message": "已开始预加载行业信息，完成后选股时直接从数据库读取"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/screener/results")
 async def get_results(run_id: Optional[str] = None):
     """获取选股结果"""
@@ -79,6 +99,30 @@ async def get_results(run_id: Optional[str] = None):
         df = get_screen_result(run_id)
         if df.empty:
             return {"code": 0, "message": "无选股结果", "data": {"run_id": run_id, "count": 0, "results": []}}
+
+        # 获取股票代码列表
+        codes = df["code"].tolist() if "code" in df.columns else []
+
+        # 补充行业信息（只从缓存/数据库读取，不调用外部API避免阻塞）
+        industries = {}
+        if codes:
+            try:
+                from industry import load_industries_from_db
+                industries = load_industries_from_db()
+                # 只保留当前结果中的股票
+                industries = {c: industries[c] for c in codes if c in industries}
+            except Exception as e:
+                print(f"加载行业信息失败: {e}")
+
+        # 补充基本面评分（只从缓存/数据库读取，不调用外部API避免阻塞）
+        fundamentals = {}
+        if codes:
+            try:
+                from fundamentals import load_fundamentals_from_db
+                fundamentals = load_fundamentals_from_db()
+                fundamentals = {c: fundamentals[c] for c in codes if c in fundamentals}
+            except Exception as e:
+                print(f"加载基本面评分失败: {e}")
 
         results = []
         for _, row in df.iterrows():
@@ -90,6 +134,20 @@ async def get_results(run_id: Optional[str] = None):
                 elif hasattr(v, "isoformat"):
                     v = str(v)
                 item[col] = v
+
+            code = str(row.get("code", ""))
+            # 补充行业
+            item["industry"] = industries.get(code, "")
+            # 补充基本面评分（含完整详情）
+            fund = fundamentals.get(code, {})
+            item["fund_score"] = fund.get("score")
+            item["fund_grade"] = fund.get("grade")
+            item["roe"] = fund.get("roe")
+            item["rev_growth"] = fund.get("rev_growth")
+            item["profit_growth"] = fund.get("profit_growth")
+            item["debt_ratio"] = fund.get("debt_ratio")
+            item["fund_details"] = fund.get("details", {})
+
             results.append(item)
 
         return {

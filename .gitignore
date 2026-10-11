@@ -8,6 +8,7 @@ web/static/assets/
 # 数据库文件
 web/data/database/*.db
 web/data/duckdb/*.duckdb
+web/data/duckdb/*.wal
 strategy/screener_results.db
 
 # 临时脚本
