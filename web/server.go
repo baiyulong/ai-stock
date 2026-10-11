@@ -15,6 +15,7 @@ import (
 	"github.com/injoyai/tdx/extend"
 	"github.com/injoyai/tdx/protocol"
 	"web/duckdb"
+	"web/fallback"
 	"web/screener"
 )
 
@@ -116,7 +117,32 @@ func handleGetQuote(w http.ResponseWriter, r *http.Request) {
 
 	quotes, err := client.GetQuote(codes...)
 	if err != nil {
-		errorResponse(w, fmt.Sprintf("获取行情失败: %v", err))
+		log.Printf("[quote] TDX failed: %v, trying fallback sources", err)
+		// TDX失败，尝试备用数据源
+		fbQuotes, fbErr := fallback.GetManager().GetQuote(codes)
+		if fbErr != nil {
+			errorResponse(w, fmt.Sprintf("获取行情失败: %v (备用源也失败: %v)", err, fbErr))
+			return
+		}
+		// 转换为TDX格式返回
+		result := make([]map[string]interface{}, 0, len(fbQuotes))
+		for _, q := range fbQuotes {
+			result = append(result, map[string]interface{}{
+				"code":   q.Code,
+				"name":   q.Name,
+				"price":  q.Price,
+				"open":   q.Open,
+				"high":   q.High,
+				"low":    q.Low,
+				"last_close": q.LastClose,
+				"volume": q.Volume,
+				"amount": q.Amount,
+				"inner":  q.Inner,
+				"outer":  q.Outer,
+				"source": q.Source,
+			})
+		}
+		successResponse(w, result)
 		return
 	}
 
@@ -807,6 +833,7 @@ func main() {
 	http.HandleFunc("/api/etf-codes", handleGetETFCodes)
 	http.HandleFunc("/api/server-status", handleGetServerStatus)
 	http.HandleFunc("/api/health", handleHealthCheck)
+	http.HandleFunc("/api/fallback/status", handleFallbackStatus)
 	http.HandleFunc("/api/etf", handleGetETFList)
 	http.HandleFunc("/api/trade-history", handleGetTradeHistory)
 	http.HandleFunc("/api/trade-history/full", handleGetTradeHistoryFull)

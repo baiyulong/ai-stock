@@ -13,6 +13,7 @@ import (
 	"github.com/injoyai/tdx"
 	"github.com/injoyai/tdx/extend"
 	"github.com/injoyai/tdx/protocol"
+	"web/fallback"
 )
 
 // 扩展API接口
@@ -1332,4 +1333,13 @@ func fetchIndexAll(code, klineType string) ([]*protocol.Kline, error) {
 		}
 		return resp.List, nil
 	}
+}
+
+// handleFallbackStatus 备用数据源状态查询
+func handleFallbackStatus(w http.ResponseWriter, r *http.Request) {
+	status := fallback.GetManager().GetSourceStatus()
+	successResponse(w, map[string]interface{}{
+		"sources":       status,
+		"tdx_connected": client != nil,
+	})
 }

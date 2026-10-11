@@ -248,6 +248,47 @@ const btEndDate = ref('');
 const btCapital = ref(100000);
 const btFeeRate = ref(0.00025); // 手续费率，默认万2.5
 
+// 状态栏相关
+const connectionStatus = ref<'connected' | 'disconnected' | 'checking'>('checking');
+const lastQuoteTime = ref<number>(0);
+const priceDelay = ref(0);
+const currentTime = ref('');
+let statusTimer: ReturnType<typeof setInterval> | null = null;
+
+const connectionStatusText = computed(() => {
+  switch (connectionStatus.value) {
+    case 'connected': return '已连接';
+    case 'disconnected': return '已断开';
+    case 'checking': return '连接中...';
+  }
+});
+
+const priceDelayText = computed(() => {
+  if (priceDelay.value < 5) return '正常';
+  if (priceDelay.value < 15) return `${priceDelay.value}秒`;
+  if (priceDelay.value < 60) return `${priceDelay.value}秒`;
+  return `${Math.floor(priceDelay.value / 60)}分${priceDelay.value % 60}秒`;
+});
+
+const lastUpdateText = computed(() => {
+  if (!lastQuoteTime.value) return '--';
+  const d = new Date(lastQuoteTime.value);
+  return d.toLocaleTimeString('zh-CN', { hour12: false });
+});
+
+function updateStatus() {
+  const now = Date.now();
+  currentTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  if (lastQuoteTime.value) {
+    priceDelay.value = Math.floor((now - lastQuoteTime.value) / 1000);
+    if (priceDelay.value > 30) {
+      connectionStatus.value = 'disconnected';
+    } else {
+      connectionStatus.value = 'connected';
+    }
+  }
+}
+
 function checkWatchlist() {
   inWatchlist.value = isInWatchlist(props.code);
 }
@@ -262,12 +303,19 @@ function toggleWatch() {
 }
 
 async function loadQuote() {
-  const q = isIndexCode(props.code)
-    ? await fetchIndexQuote(props.code)
-    : await fetchStockQuote(props.code);
-  if (q) {
-    q.code = isIndexCode(props.code) ? getIndexPureCode(props.code) : q.code;
-    quote.value = q;
+  try {
+    const q = isIndexCode(props.code)
+      ? await fetchIndexQuote(props.code)
+      : await fetchStockQuote(props.code);
+    if (q) {
+      q.code = isIndexCode(props.code) ? getIndexPureCode(props.code) : q.code;
+      quote.value = q;
+      lastQuoteTime.value = Date.now();
+      connectionStatus.value = 'connected';
+    }
+  } catch (e) {
+    console.warn('fetch quote failed:', e);
+    connectionStatus.value = 'disconnected';
   }
 }
 
@@ -456,6 +504,8 @@ onMounted(() => {
   checkWatchlist();
   loadQuote();
   quoteTimer = setInterval(loadQuote, 5000);
+  statusTimer = setInterval(updateStatus, 1000);
+  updateStatus();
   nextTick(() => initChart());
   document.addEventListener('click', closeIndicatorMenu);
 });
@@ -466,6 +516,7 @@ function closeIndicatorMenu() {
 
 onUnmounted(() => {
   if (quoteTimer) clearInterval(quoteTimer);
+  if (statusTimer) clearInterval(statusTimer);
   document.removeEventListener('click', closeIndicatorMenu);
   if (chartRef.value) {
     chartRef.value.destroy();
@@ -602,6 +653,29 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="status-bar" :class="{ light: theme === 'light' }">
+      <div class="status-item">
+        <span class="status-dot" :class="connectionStatus"></span>
+        <span>{{ connectionStatusText }}</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">行情延迟:</span>
+        <span :class="{ warning: priceDelay > 10, danger: priceDelay > 30 }">{{ priceDelayText }}</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">最后更新:</span>
+        <span>{{ lastUpdateText }}</span>
+      </div>
+      <div class="status-item">
+        <span class="status-label">服务器:</span>
+        <span>localhost:18080</span>
+      </div>
+      <div class="status-item status-right">
+        <span class="status-label">{{ currentTime }}</span>
       </div>
     </div>
 
@@ -809,6 +883,69 @@ onUnmounted(() => {
 .chart-container {
   flex: 1;
   min-height: 0;
+}
+
+/* 底部状态栏 */
+.status-bar {
+  height: 28px;
+  background: #1e222d;
+  border-top: 1px solid #2a2e39;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 20px;
+  font-size: 11px;
+  color: #787b86;
+  flex-shrink: 0;
+}
+.status-bar.light {
+  background: #f5f6f8;
+  border-top-color: #e0e3eb;
+  color: #666;
+}
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.status-right {
+  margin-left: auto;
+}
+.status-label {
+  color: #787b86;
+}
+.status-bar.light .status-label {
+  color: #888;
+}
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-dot.connected {
+  background: #26a69a;
+  box-shadow: 0 0 6px #26a69a;
+}
+.status-dot.disconnected {
+  background: #ef5350;
+  box-shadow: 0 0 6px #ef5350;
+  animation: pulse 1.5s infinite;
+}
+.status-dot.checking {
+  background: #ffb74d;
+  box-shadow: 0 0 6px #ffb74d;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.status-item .warning {
+  color: #ffb74d;
+}
+.status-item .danger {
+  color: #ef5350;
 }
 
 /* 回测面板 */
